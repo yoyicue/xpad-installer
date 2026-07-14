@@ -38,9 +38,35 @@ class StandaloneProjectTests(unittest.TestCase):
             "exploit/XpadInstaller.java",
             "scripts/build_installer_dex.sh",
             "scripts/build_single_elf.sh",
+            "scripts/package_release.sh",
+            "docs/USAGE.zh-CN.md",
+            "VERSION",
         )
         for relative in required:
             self.assertTrue((ROOT / relative).is_file(), relative)
+
+    def test_beginner_guide_covers_public_cli_and_official_adb_docs(self):
+        guide = (ROOT / "docs/USAGE.zh-CN.md").read_text()
+        expected = (
+            "adb devices -l",
+            "adb -s SERIAL push",
+            "xpad-install doctor",
+            "xpad-install install",
+            "xpad-install upgrade",
+            "xpad-install verify",
+            "xpad-install activate",
+            "xpad-install autostart enable",
+            "xpad-install znxrun preflight",
+            "xpad-install znxrun create",
+            "xpad-install cleanup",
+            "https://developer.android.com/tools/adb",
+            "https://developer.android.com/tools/releases/platform-tools",
+        )
+        for value in expected:
+            self.assertIn(value, guide, value)
+
+        package_script = (ROOT / "scripts/package_release.sh").read_text()
+        self.assertIn("docs/USAGE.zh-CN.md", package_script)
 
     def test_generated_dex_files_have_dex_headers(self):
         for name in (

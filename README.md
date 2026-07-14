@@ -5,6 +5,11 @@ builds the arm64 Android executable `xpad-install`; it contains the installer
 DEX in the ELF itself and does not require a separately copied DEX to execute
 normal commands.
 
+New to ADB? Start with the step-by-step
+[Chinese beginner guide](docs/USAGE.zh-CN.md), which explains device
+authorization, file transfer, every public command, exit codes, and common
+errors.
+
 This directory was extracted from `xpad2` revision `178782c`. It intentionally
 contains the current, device-side implementation that was exercised on the
 target firmware. The older host-side Python experiment, which depended on an
@@ -60,9 +65,9 @@ the ELF.
 make package
 ```
 
-This produces `dist/xpad-installer-v0.1.0-android-arm64.zip`. The archive
-contains the executable, this README, the GPLv3 license, and a SHA-256 manifest
-for the executable.
+This produces `dist/xpad-installer-v0.1.1-android-arm64.zip`. The archive
+contains the executable, this README, the Chinese beginner guide, the GPLv3
+license, and a SHA-256 manifest for the executable.
 
 ## Deploy and use
 
@@ -93,6 +98,7 @@ library packaged in its APK and does not depend on this directory.
 
 - `native/`: single-file Android CLI and embedded-DEX assembly
 - `exploit/`: bounded Java installer operations and generated DEX files
+- `docs/`: end-user documentation
 - `scripts/`: reproducible DEX and ELF build scripts
 - `tests/`: standalone source/package integrity checks
 

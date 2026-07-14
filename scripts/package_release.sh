@@ -23,6 +23,7 @@ trap 'rm -rf "$STAGE"' EXIT HUP INT TERM
 mkdir -p "$STAGE/$NAME"
 install -m 0755 "$ROOT/dist/xpad-install" "$STAGE/$NAME/xpad-install"
 install -m 0644 "$ROOT/README.md" "$STAGE/$NAME/README.md"
+install -m 0644 "$ROOT/docs/USAGE.zh-CN.md" "$STAGE/$NAME/USAGE.zh-CN.md"
 install -m 0644 "$ROOT/LICENSE" "$STAGE/$NAME/LICENSE"
 (
   cd "$STAGE/$NAME"
@@ -38,6 +39,7 @@ rm -f "$OUTPUT"
     "$NAME/" \
     "$NAME/xpad-install" \
     "$NAME/README.md" \
+    "$NAME/USAGE.zh-CN.md" \
     "$NAME/LICENSE" \
     "$NAME/SHA256SUMS"
 )
