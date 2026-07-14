@@ -1,0 +1,6 @@
+/dist/
+/.pytest_cache/
+/tests/__pycache__/
+*.class
+*.pyc
+.DS_Store
