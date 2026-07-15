@@ -1021,6 +1021,21 @@ static int ensure_znxrun(const char *executable) {
   return rc;
 }
 
+static int finalize_apk_persistence(const char *executable, int rc,
+                                    const char *transport) {
+  if (rc != 0 || getuid() != 2000) return rc;
+  if (znxrun_status(0) == 0) return 0;
+  fprintf(stderr,
+          "xpad-install: %s APK commit degraded 0044 persistence; repairing\n",
+          transport);
+  if (ensure_znxrun(executable) != 0) {
+    fprintf(stderr,
+            "xpad-install: APK installed but managed 0044 repair failed\n");
+    return 1;
+  }
+  return 0;
+}
+
 int main(int argc, char **argv) {
   if (argc >= 2 && (!strcmp(argv[1], "--help") || !strcmp(argv[1], "-h") ||
                     !strcmp(argv[1], "help"))) {
@@ -1085,14 +1100,11 @@ int main(int argc, char **argv) {
         if (ensure_znxrun(argv[0]) != 0)
           fprintf(stderr, "xpad-install: 0044 repair failed; trying safe fallback transport\n");
       }
+      fprintf(stderr,
+              "xpad-install: trying managed 0044 installer identity first\n");
       int znxrun = run_java_as_znxrun(argc - 1, argv + 1);
       if (znxrun == 0) {
-        if (getuid() == 2000 && znxrun_status(0) != 0) {
-          fprintf(stderr, "xpad-install: APK commit degraded 0044 persistence; repairing\n");
-          if (ensure_znxrun(argv[0]) != 0)
-            fprintf(stderr, "xpad-install: APK installed but 0044 persistence is degraded\n");
-        }
-        return 0;
+        return finalize_apk_persistence(argv[0], 0, "0044");
       }
       if (znxrun > 0) {
         fprintf(stderr, "xpad-install: 0044 APK path failed; using safe uid 1000 fallback\n");
@@ -1103,6 +1115,19 @@ int main(int argc, char **argv) {
     return ionstack_root_java(argc - 1, argv + 1);
   }
   int root = ionstack_delegate(argc, argv);
-  if (root >= 0) return root;
-  return system_transport(argc, argv);
+  int apk_operation = argc >= 3 &&
+      (!strcmp(argv[1], "install") || !strcmp(argv[1], "upgrade"));
+  if (root >= 0) {
+    if (apk_operation)
+      fprintf(stderr,
+              "xpad-install: using already-available temporary-root transport\n");
+    return apk_operation ? finalize_apk_persistence(argv[0], root, "temporary-root") : root;
+  }
+  if (apk_operation)
+    fprintf(stderr,
+            "xpad-install: using final UID 1000/31317 fallback\n");
+  int system_rc = system_transport(argc, argv);
+  return apk_operation
+      ? finalize_apk_persistence(argv[0], system_rc, "31317")
+      : system_rc;
 }

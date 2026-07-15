@@ -157,7 +157,7 @@ adb -s SERIAL shell getprop ro.product.model
 macOS/Linux 校验：
 
 ```shell
-cd xpad-installer-v0.2.0-android-arm64
+cd xpad-installer-v0.2.1-android-arm64
 shasum -a 256 -c SHA256SUMS
 ```
 
@@ -321,11 +321,15 @@ Android 仍会强制要求：
 
 | 后端 | 含义 | 适合谁 |
 |---|---|---|
-| `auto` | 优先尝试 OEM/0044 路径；失败时选择受支持的安全回退 | 小白首选 |
+| `auto` | 先尝试 OEM/0044；失败后才降级，31317 始终是最后回退 | 小白首选 |
 | `provider` | 只请求真实 `znxxservice` Provider 安装 | 已确认 Provider 可用时 |
 | `direct` | 以 UID 1000 创建 PackageInstaller session，并通过 FileBridge 写入 APK | Provider 不可用的诊断/回退 |
 
 建议始终先用 `auto`。
+
+如果最终由 31317 完成 APK 提交，工具会在退出前立即检查 0044；PackageManager 重写导致
+alias 丢失时，会补回正式 anchor 并再次验证 UID 10072。补回失败时命令返回失败，不会把
+“APK 已安装但备用身份损坏”误报为完整成功。
 
 `direct` 不是“root 强装”。源码明确阻止 UID 0 直接调用该后端；它需要正确的 UID 1000 身份和 OEM installer attribution。
 

@@ -32,10 +32,13 @@ xpad-install cleanup
 ```
 
 `auto` first verifies and, when needed, repairs the managed UID 10072/0044 OEM
-installer identity. The persistent source is a dedicated no-code, no-permission
+installer identity, then always tries that identity before temporary root or
+the riskier 31317 runner. The persistent source is a dedicated no-code, no-permission
 package named `com.yoyicue.xpad2.installeranchor`, embedded in the ELF and not
 used for normal application updates. If that route cannot be repaired, the
-installer uses the bounded UID 1000/31317 runner. The 31317 implementation
+installer uses the bounded UID 1000/31317 runner as the last fallback. After a
+successful fallback APK commit it immediately repairs and re-verifies 0044; a
+failed repair makes the command report partial failure. The 31317 implementation
 aligns both Zygotes, restores the hidden setting, stops the sacrificial
 activities, and removes transfer artifacts before returning.
 
@@ -86,7 +89,7 @@ recovery-key fingerprint. Private key material is never copied into the repo.
 make package
 ```
 
-This produces `dist/xpad-installer-v0.2.0-android-arm64.zip`. The archive
+This produces `dist/xpad-installer-v0.2.1-android-arm64.zip`. The archive
 contains the executable, this README, the Chinese beginner guide, the GPLv3
 license, and a SHA-256 manifest for the executable.
 

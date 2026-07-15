@@ -148,6 +148,18 @@ class StandaloneProjectTests(unittest.TestCase):
         self.assertIn("PackageInstaller.SessionParams.MODE_INHERIT_EXISTING", direct)
         self.assertNotIn("Settings.Global.putString", java)
 
+    def test_auto_prioritizes_0044_and_repairs_it_after_fallback(self):
+        native = (ROOT / "native/xpad_install.c").read_text()
+        java = (ROOT / "exploit/XpadInstaller.java").read_text()
+        self.assertIn('if (strcmp(backend, "direct"))', native)
+        self.assertIn('finalize_apk_persistence(argv[0], system_rc, "31317")', native)
+        self.assertIn("trying managed 0044 installer identity first", native)
+        self.assertIn("using final UID 1000/31317 fallback", native)
+        self.assertIn("if (znxrun_status(0) == 0) return 0;", native)
+        self.assertIn("if (ensure_znxrun(executable) != 0)", native)
+        self.assertIn("if (!ok && Process.myUid() != 0)", java)
+        self.assertIn("provider did not commit; trying direct backend in current identity", java)
+
     def test_extraction_has_no_monorepo_absolute_path(self):
         suffixes = {".c", ".S", ".java", ".sh", ".md", ".py"}
         old_root = str(Path.home() / "xpad2")
