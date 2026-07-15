@@ -20,13 +20,22 @@
 
 extern const unsigned char xpad_dex_start[];
 extern const unsigned char xpad_dex_end[];
+extern const unsigned char xpad_anchor_start[];
+extern const unsigned char xpad_anchor_end[];
 
 #define SU_SOCKET "/data/local/tmp/temp_su.sock"
 #define HIDDEN_SETTING "hidden_api_blacklist_exemptions"
+#define INSTALL_WHITELIST "install_package_whitelist"
 #define SYSTEM_DEX "/data/user/0/com.android.settings/cache/xpad-installer/embedded.dex"
 #define SYSTEM_APK "/data/user/0/com.android.settings/cache/xpad-installer/staged.apk"
 #define ROOT_DEX "/data/local/tmp/.xpad-installer.dex"
 #define ZNXRUN_APK "/data/local/tmp/.xpad-znxrun.apk"
+#define ANCHOR_APK "/data/local/tmp/.xpad-installer-anchor.apk"
+#define ANCHOR_PACKAGE "com.yoyicue.xpad2.installeranchor"
+#define OEM_INSTALLER "com.tal.pad.znxxservice"
+#define ZNXRUN_ALIAS_LINE \
+  "znxrun 10072 1 /data/user/0/com.tal.pad.znxxservice " \
+  "default:targetSdkVersion=28 none 0 0 1 @null"
 #define ZYGOTE_PORT 8888
 #define TRANSFER_PORT 28889
 #define ZYGOTE_WRITER_SIZE 8192
@@ -35,6 +44,13 @@ extern const unsigned char xpad_dex_end[];
 #define PRIMARY_TRIGGER_ACTIVITY "com.android.settings/.Settings"
 #define SECONDARY_TRIGGER_PACKAGE "com.tal.init.ota"
 #define SECONDARY_TRIGGER_ACTIVITY "com.tal.init.ota/.MainActivity"
+
+static volatile sig_atomic_t guarded_child = -1;
+
+static void forward_guarded_signal(int signal_number) {
+  pid_t child = (pid_t)guarded_child;
+  if (child > 0) kill(child, signal_number);
+}
 
 static int write_all(int fd, const void *data, size_t len) {
   const unsigned char *p = data;
@@ -134,6 +150,207 @@ static int wait_command(pid_t pid) {
 
 static int run_command(char *const argv[]) {
   return wait_command(spawn_command(argv, 0));
+}
+
+static int capture_command(char *const argv[], char **output) {
+  int pipes[2];
+  if (pipe(pipes) != 0) return 127;
+  pid_t pid = fork();
+  if (pid < 0) {
+    close(pipes[0]); close(pipes[1]);
+    return 127;
+  }
+  if (pid == 0) {
+    close(pipes[0]);
+    dup2(pipes[1], STDOUT_FILENO);
+    dup2(pipes[1], STDERR_FILENO);
+    if (pipes[1] > STDERR_FILENO) close(pipes[1]);
+    execv(argv[0], argv);
+    _exit(127);
+  }
+  close(pipes[1]);
+  size_t used = 0, capacity = 4096;
+  char *buffer = malloc(capacity);
+  if (!buffer) {
+    close(pipes[0]);
+    kill(pid, SIGKILL);
+    wait_command(pid);
+    return 70;
+  }
+  for (;;) {
+    if (used + 2048 + 1 > capacity) {
+      if (capacity >= 131072) {
+        free(buffer); close(pipes[0]); kill(pid, SIGKILL); wait_command(pid);
+        return 70;
+      }
+      capacity *= 2;
+      char *grown = realloc(buffer, capacity);
+      if (!grown) {
+        free(buffer); close(pipes[0]); kill(pid, SIGKILL); wait_command(pid);
+        return 70;
+      }
+      buffer = grown;
+    }
+    ssize_t count = read(pipes[0], buffer + used, capacity - used - 1);
+    if (count < 0 && errno == EINTR) continue;
+    if (count < 0) {
+      free(buffer); close(pipes[0]); kill(pid, SIGKILL); wait_command(pid);
+      return 74;
+    }
+    if (count == 0) break;
+    used += (size_t)count;
+  }
+  close(pipes[0]);
+  buffer[used] = 0;
+  *output = buffer;
+  return wait_command(pid);
+}
+
+static void trim_output(char *value) {
+  size_t len = strlen(value);
+  while (len && (value[len - 1] == '\n' || value[len - 1] == '\r' ||
+                 value[len - 1] == ' ' || value[len - 1] == '\t'))
+    value[--len] = 0;
+}
+
+struct whitelist_guard {
+  char *original;
+  int original_missing;
+  int changed;
+};
+
+static int csv_contains(const char *csv, const char *item) {
+  if (!csv || !*csv) return 0;
+  size_t item_len = strlen(item);
+  const char *cursor = csv;
+  while (*cursor) {
+    while (*cursor == ' ' || *cursor == ',') cursor++;
+    const char *end = strchr(cursor, ',');
+    if (!end) end = cursor + strlen(cursor);
+    const char *trimmed = end;
+    while (trimmed > cursor && trimmed[-1] == ' ') trimmed--;
+    if ((size_t)(trimmed - cursor) == item_len && !strncmp(cursor, item, item_len))
+      return 1;
+    cursor = *end ? end + 1 : end;
+  }
+  return 0;
+}
+
+static int settings_get_global(const char *name, char **value, int *missing) {
+  char *const argv[] = {
+    "/system/bin/settings", "get", "global", (char *)name, NULL
+  };
+  char *output = NULL;
+  int rc = capture_command(argv, &output);
+  if (rc != 0) {
+    free(output);
+    return rc;
+  }
+  trim_output(output);
+  *missing = !*output || !strcmp(output, "null");
+  if (*missing) output[0] = 0;
+  *value = output;
+  return 0;
+}
+
+static int settings_set_global(const char *name, const char *value, int missing) {
+  if (missing) {
+    char *const argv[] = {
+      "/system/bin/settings", "delete", "global", (char *)name, NULL
+    };
+    return run_command(argv);
+  }
+  char *const argv[] = {
+    "/system/bin/settings", "put", "global", (char *)name, (char *)value, NULL
+  };
+  return run_command(argv);
+}
+
+static int prepare_whitelist(const char *package_name, struct whitelist_guard *guard) {
+  memset(guard, 0, sizeof(*guard));
+  int rc = settings_get_global(INSTALL_WHITELIST, &guard->original,
+                               &guard->original_missing);
+  if (rc != 0) {
+    fprintf(stderr, "xpad-install: cannot read temporary installer whitelist\n");
+    return rc;
+  }
+  if (!guard->original_missing && csv_contains(guard->original, package_name)) return 0;
+  size_t original_len = guard->original_missing ? 0 : strlen(guard->original);
+  size_t length = original_len + (original_len ? 1 : 0) + strlen(package_name) + 1;
+  char *updated = malloc(length);
+  if (!updated) return 70;
+  snprintf(updated, length, "%s%s%s", original_len ? guard->original : "",
+           original_len ? "," : "", package_name);
+  rc = settings_set_global(INSTALL_WHITELIST, updated, 0);
+  free(updated);
+  if (rc != 0) {
+    fprintf(stderr, "xpad-install: cannot prepare temporary installer whitelist\n");
+    return rc;
+  }
+  guard->changed = 1;
+  char *verified = NULL;
+  int missing = 0;
+  rc = settings_get_global(INSTALL_WHITELIST, &verified, &missing);
+  int valid = rc == 0 && !missing && csv_contains(verified, package_name);
+  free(verified);
+  if (!valid) {
+    fprintf(stderr, "xpad-install: temporary installer whitelist verification failed\n");
+    return 1;
+  }
+  return 0;
+}
+
+static int restore_whitelist(struct whitelist_guard *guard) {
+  int rc = 0;
+  if (guard->changed) {
+    rc = settings_set_global(INSTALL_WHITELIST, guard->original,
+                             guard->original_missing);
+    char *verified = NULL;
+    int missing = 0;
+    if (rc == 0) rc = settings_get_global(INSTALL_WHITELIST, &verified, &missing);
+    if (rc == 0 && (missing != guard->original_missing ||
+        (!missing && strcmp(verified, guard->original)))) rc = 1;
+    free(verified);
+  }
+  free(guard->original);
+  memset(guard, 0, sizeof(*guard));
+  if (rc != 0)
+    fprintf(stderr, "xpad-install: temporary installer whitelist restore failed\n");
+  return rc;
+}
+
+static int znxrun_status(int print_status) {
+  char *uid_output = NULL;
+  char *const uid_argv[] = {
+    "/system/bin/run-as", "znxrun", "/system/bin/id", "-u", NULL
+  };
+  int alias_rc = capture_command(uid_argv, &uid_output);
+  if (uid_output) trim_output(uid_output);
+  int alias_healthy = alias_rc == 0 && uid_output && !strcmp(uid_output, "10072");
+  int alias_invalid = alias_rc == 0 && !alias_healthy;
+
+  char *dump = NULL;
+  char *const dump_argv[] = {
+    "/system/bin/dumpsys", "package", ANCHOR_PACKAGE, NULL
+  };
+  int dump_rc = capture_command(dump_argv, &dump);
+  const char *package_marker = "Package [" ANCHOR_PACKAGE "]";
+  const char *expected_source = "installerPackageName=" OEM_INSTALLER "\n" ZNXRUN_ALIAS_LINE;
+  int anchor_installed = dump_rc == 0 && dump && strstr(dump, package_marker);
+  int anchor_persisted = anchor_installed && strstr(dump, expected_source);
+
+  const char *status = alias_healthy && anchor_persisted ? "healthy" :
+      alias_invalid ? "invalid" : alias_healthy ? "legacy" : "missing";
+  const char *alias = alias_healthy ? "healthy" : alias_invalid ? "invalid" : "missing";
+  const char *anchor = anchor_persisted ? "anchored" :
+      anchor_installed ? "unanchored" : "missing";
+  if (print_status) {
+    printf("ZNXRUN_STATUS status=%s alias=%s uid=%s anchor=%s package=%s\n",
+           status, alias, alias_healthy ? "10072" : "none", anchor, ANCHOR_PACKAGE);
+  }
+  free(uid_output);
+  free(dump);
+  return !strcmp(status, "healthy") ? 0 : 1;
 }
 
 static int sh(const char *command) {
@@ -480,7 +697,8 @@ static int run_java_as_znxrun(int argc, char **argv) {
 static int apk_arg_index(int argc, char **argv) {
   if (argc >= 2 && (!strcmp(argv[0], "install") || !strcmp(argv[0], "upgrade")))
     return argc - 1;
-  if (argc >= 4 && !strcmp(argv[0], "znxrun") && !strcmp(argv[1], "create")) {
+  if (argc >= 4 && !strcmp(argv[0], "znxrun") &&
+      (!strcmp(argv[1], "create") || !strcmp(argv[1], "ensure"))) {
     for (int i = 2; i + 1 < argc; i++) if (!strcmp(argv[i], "--apk")) return i + 1;
   }
   return -1;
@@ -648,8 +866,10 @@ static void usage(FILE *out) {
       "  xpad-install verify PACKAGE [VERSION_CODE]\n"
       "  xpad-install activate --starter=PATH --apk=MANAGER.apk\n"
       "  xpad-install autostart enable\n"
+      "  xpad-install znxrun status\n"
+      "  xpad-install znxrun ensure\n"
       "  xpad-install znxrun preflight\n"
-      "  xpad-install znxrun create --apk UPDATE.apk [--apply]\n"
+      "  xpad-install znxrun create --package PACKAGE --apk UPDATE.apk [--apply]\n"
       "  xpad-install cleanup\n"
       "  xpad-install -h | --help\n"
       "\n"
@@ -672,6 +892,8 @@ static void usage(FILE *out) {
       "  adb shell /data/local/tmp/xpad-install install /sdcard/Download/app.apk\n"
       "  adb shell /data/local/tmp/xpad-install verify com.example.app\n"
       "  adb shell /data/local/tmp/xpad-install autostart enable\n"
+      "  adb shell /data/local/tmp/xpad-install znxrun status\n"
+      "  adb shell /data/local/tmp/xpad-install znxrun ensure\n"
       "  adb shell /data/local/tmp/xpad-install znxrun preflight\n"
       "\n"
       "The tool restores hidden_api_blacklist_exemptions and removes temporary\n"
@@ -711,7 +933,7 @@ cleanup:
   cleanup_system_runner();
   cleanup_31317();
   int verify_znxrun = argc >= 4 && !strcmp(argv[1], "znxrun") &&
-      !strcmp(argv[2], "create");
+      (!strcmp(argv[2], "create") || !strcmp(argv[2], "ensure"));
   for (int i = 3; verify_znxrun && i < argc; i++)
     if (!strcmp(argv[i], "--apply")) {
       if (rc == 0 && system("/system/bin/run-as znxrun /system/bin/id") != 0) {
@@ -720,6 +942,82 @@ cleanup:
       }
       break;
     }
+  return rc;
+}
+
+static const char *option_value(int argc, char **argv, const char *name) {
+  for (int i = 1; i + 1 < argc; i++)
+    if (!strcmp(argv[i], name)) return argv[i + 1];
+  return NULL;
+}
+
+static int run_znxrun_mutation(int argc, char **argv, const char *package_name) {
+  if (getuid() != 2000) {
+    fprintf(stderr, "xpad-install: znxrun persistence maintenance requires adb shell uid 2000\n");
+    return 77;
+  }
+  struct whitelist_guard guard;
+  int rc = prepare_whitelist(package_name, &guard);
+  if (rc != 0) {
+    restore_whitelist(&guard);
+    return rc;
+  }
+  pid_t child = fork();
+  if (child < 0) {
+    restore_whitelist(&guard);
+    return 70;
+  }
+  if (child == 0) _exit(system_transport(argc, argv));
+
+  struct sigaction action, old_hup, old_int, old_term;
+  memset(&action, 0, sizeof(action));
+  action.sa_handler = forward_guarded_signal;
+  sigemptyset(&action.sa_mask);
+  guarded_child = child;
+  sigaction(SIGHUP, &action, &old_hup);
+  sigaction(SIGINT, &action, &old_int);
+  sigaction(SIGTERM, &action, &old_term);
+  int status = 0;
+  while (waitpid(child, &status, 0) < 0) {
+    if (errno != EINTR) { status = -1; break; }
+  }
+  guarded_child = -1;
+  sigaction(SIGHUP, &old_hup, NULL);
+  sigaction(SIGINT, &old_int, NULL);
+  sigaction(SIGTERM, &old_term, NULL);
+  if (status < 0) rc = 127;
+  else if (WIFEXITED(status)) rc = WEXITSTATUS(status);
+  else rc = 128 + WTERMSIG(status);
+  if (rc >= 128) {
+    cleanup_system_runner();
+    cleanup_31317();
+    force_stop_package(PRIMARY_TRIGGER_PACKAGE);
+    force_stop_package(SECONDARY_TRIGGER_PACKAGE);
+  }
+  int restore_rc = restore_whitelist(&guard);
+  if (restore_rc != 0 && rc == 0) rc = restore_rc;
+  return rc;
+}
+
+static int ensure_znxrun(const char *executable) {
+  if (znxrun_status(0) == 0) {
+    znxrun_status(1);
+    puts("ZNXRUN_ENSURE result=unchanged");
+    return 0;
+  }
+  if (write_file(ANCHOR_APK, xpad_anchor_start,
+                 (size_t)(xpad_anchor_end - xpad_anchor_start), 0600) != 0) {
+    fprintf(stderr, "xpad-install: cannot stage embedded installer anchor\n");
+    return 74;
+  }
+  char *ensure_argv[] = {
+    (char *)executable, "znxrun", "ensure", "--apk", ANCHOR_APK, "--apply", NULL
+  };
+  int rc = run_znxrun_mutation(6, ensure_argv, ANCHOR_PACKAGE);
+  unlink(ANCHOR_APK);
+  int status_rc = znxrun_status(1);
+  if (rc == 0 && status_rc != 0) rc = 1;
+  printf("ZNXRUN_ENSURE result=%s\n", rc == 0 ? "repaired" : "failed");
   return rc;
 }
 
@@ -733,6 +1031,24 @@ int main(int argc, char **argv) {
     usage(stderr);
     return 64;
   }
+  if (!strcmp(argv[1], "znxrun") && argc >= 3 && !strcmp(argv[2], "status")) {
+    if (argc != 3) { usage(stderr); return 64; }
+    return znxrun_status(1);
+  }
+  if (!strcmp(argv[1], "znxrun") && argc >= 3 && !strcmp(argv[2], "ensure")) {
+    if (argc != 3) { usage(stderr); return 64; }
+    return ensure_znxrun(argv[0]);
+  }
+  if (!strcmp(argv[1], "znxrun") && argc >= 3 && !strcmp(argv[2], "create")) {
+    const char *package_name = option_value(argc - 1, argv + 1, "--package");
+    if (!package_name || !*package_name) {
+      fprintf(stderr, "xpad-install: generic znxrun create requires --package PACKAGE; "
+                      "use 'znxrun ensure' for the managed anchor\n");
+      return 64;
+    }
+    return run_znxrun_mutation(argc, argv, package_name);
+  }
+  if (!strcmp(argv[1], "doctor")) znxrun_status(1);
   if (argc >= 2 && !strcmp(argv[1], "--root-child")) {
     if (argc >= 3 && (!strcmp(argv[2], "activate") || !strcmp(argv[2], "serve"))) {
       return serve(argc - 2, argv + 2);
@@ -764,8 +1080,20 @@ int main(int argc, char **argv) {
     const char *backend = "auto";
     if (argc >= 5 && !strcmp(argv[2], "--backend")) backend = argv[3];
     if (strcmp(backend, "direct")) {
+      if (getuid() == 2000 && znxrun_status(0) != 0) {
+        fprintf(stderr, "xpad-install: repairing managed 0044 installer identity\n");
+        if (ensure_znxrun(argv[0]) != 0)
+          fprintf(stderr, "xpad-install: 0044 repair failed; trying safe fallback transport\n");
+      }
       int znxrun = run_java_as_znxrun(argc - 1, argv + 1);
-      if (znxrun == 0) return 0;
+      if (znxrun == 0) {
+        if (getuid() == 2000 && znxrun_status(0) != 0) {
+          fprintf(stderr, "xpad-install: APK commit degraded 0044 persistence; repairing\n");
+          if (ensure_znxrun(argv[0]) != 0)
+            fprintf(stderr, "xpad-install: APK installed but 0044 persistence is degraded\n");
+        }
+        return 0;
+      }
       if (znxrun > 0) {
         fprintf(stderr, "xpad-install: 0044 APK path failed; using safe uid 1000 fallback\n");
       }

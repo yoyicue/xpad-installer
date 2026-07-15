@@ -24,15 +24,26 @@ xpad-install upgrade [--backend auto|provider|direct] APK
 xpad-install verify PACKAGE [VERSION_CODE]
 xpad-install activate --starter=PATH --apk=MANAGER.apk
 xpad-install autostart enable
+xpad-install znxrun status
+xpad-install znxrun ensure
 xpad-install znxrun preflight
-xpad-install znxrun create --apk UPDATE.apk [--apply]
+xpad-install znxrun create --package PACKAGE --apk UPDATE.apk [--apply]
 xpad-install cleanup
 ```
 
-`auto` first tries the firmware's UID 10072/0044 OEM installer identity. When
-that route is unavailable, it uses the bounded UID 1000/31317 runner. The
-31317 implementation aligns both Zygotes, restores the hidden setting, stops
-the sacrificial activities, and removes transfer artifacts before returning.
+`auto` first verifies and, when needed, repairs the managed UID 10072/0044 OEM
+installer identity. The persistent source is a dedicated no-code, no-permission
+package named `com.yoyicue.xpad2.installeranchor`, embedded in the ELF and not
+used for normal application updates. If that route cannot be repaired, the
+installer uses the bounded UID 1000/31317 runner. The 31317 implementation
+aligns both Zygotes, restores the hidden setting, stops the sacrificial
+activities, and removes transfer artifacts before returning.
+
+`znxrun status` is read-only and reports `healthy`, `legacy`, `missing`, or
+`invalid`. `znxrun ensure` is idempotent: it installs/verifies the signed anchor,
+persists the exact installer attribution, restores the temporary OEM whitelist,
+and accepts success only after both `dumpsys` attribution and `run-as` UID 10072
+checks pass. It never edits `/data/system/packages.list` directly.
 
 `activate` starts BoomInstaller using UID 10072, root, or UID 1000 as
 available. `autostart enable` provisions BoomInstaller's local wireless-ADB
@@ -56,8 +67,18 @@ make verify
 ```
 
 The executable is written to `dist/xpad-install`. The build regenerates the
-three DEX artifacts from the Java sources before linking the unified DEX into
-the ELF.
+three DEX artifacts from the Java sources before linking the unified DEX and
+the verified signed installer anchor into the ELF.
+
+The repository contains the signed anchor used by ordinary reproducible builds.
+Maintainers can rebuild and sign it with the protected XPad2 production key:
+
+```shell
+XPAD2_RELEASE_SIGNING_BACKUP=/path/to/signing-backup make carrier
+```
+
+The signing script pins the package, version, production certificate and RSA
+recovery-key fingerprint. Private key material is never copied into the repo.
 
 ## Release package
 
@@ -65,7 +86,7 @@ the ELF.
 make package
 ```
 
-This produces `dist/xpad-installer-v0.1.1-android-arm64.zip`. The archive
+This produces `dist/xpad-installer-v0.2.0-android-arm64.zip`. The archive
 contains the executable, this README, the Chinese beginner guide, the GPLv3
 license, and a SHA-256 manifest for the executable.
 
@@ -98,6 +119,7 @@ library packaged in its APK and does not depend on this directory.
 
 - `native/`: single-file Android CLI and embedded-DEX assembly
 - `exploit/`: bounded Java installer operations and generated DEX files
+- `carrier/`: minimal installer-anchor manifest and verified signed APK
 - `docs/`: end-user documentation
 - `scripts/`: reproducible DEX and ELF build scripts
 - `tests/`: standalone source/package integrity checks

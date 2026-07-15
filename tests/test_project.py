@@ -17,7 +17,11 @@ class StandaloneProjectTests(unittest.TestCase):
             "exploit/ZnxxProviderInstaller.java",
             "exploit/Znxrun0044.java",
             "exploit/XpadInstaller.java",
+            "carrier/AndroidManifest.xml",
             "scripts/build_installer_dex.sh",
+            "scripts/build_carrier_apk.sh",
+            "scripts/sign_carrier_apk.sh",
+            "scripts/verify_carrier_apk.sh",
             "scripts/build_single_elf.sh",
             "scripts/package_release.sh",
             "tests/test_project.py",
@@ -36,7 +40,12 @@ class StandaloneProjectTests(unittest.TestCase):
             "exploit/ZnxxProviderInstaller.java",
             "exploit/Znxrun0044.java",
             "exploit/XpadInstaller.java",
+            "carrier/AndroidManifest.xml",
+            "carrier/xpad2-installer-anchor.apk",
+            "scripts/build_carrier_apk.sh",
             "scripts/build_installer_dex.sh",
+            "scripts/sign_carrier_apk.sh",
+            "scripts/verify_carrier_apk.sh",
             "scripts/build_single_elf.sh",
             "scripts/package_release.sh",
             "docs/USAGE.zh-CN.md",
@@ -56,6 +65,8 @@ class StandaloneProjectTests(unittest.TestCase):
             "xpad-install verify",
             "xpad-install activate",
             "xpad-install autostart enable",
+            "xpad-install znxrun status",
+            "xpad-install znxrun ensure",
             "xpad-install znxrun preflight",
             "xpad-install znxrun create",
             "xpad-install cleanup",
@@ -100,8 +111,42 @@ class StandaloneProjectTests(unittest.TestCase):
             "activate",
             "autostart",
             "cleanup",
+            "znxrun status",
+            "znxrun ensure",
         ):
             self.assertIn(f'"  xpad-install {command}', source)
+
+    def test_managed_0044_anchor_is_bounded_and_embedded(self):
+        manifest = (ROOT / "carrier/AndroidManifest.xml").read_text()
+        self.assertIn('package="com.yoyicue.xpad2.installeranchor"', manifest)
+        self.assertIn('android:hasCode="false"', manifest)
+        self.assertIn('android:debuggable="false"', manifest)
+        self.assertNotIn("uses-permission", manifest)
+        self.assertNotIn("<activity", manifest)
+        self.assertNotIn("<service", manifest)
+        self.assertNotIn("<receiver", manifest)
+        self.assertNotIn("<provider", manifest)
+
+        embedded = (ROOT / "native/embed_dex.S").read_text()
+        self.assertIn('.incbin "carrier/xpad2-installer-anchor.apk"', embedded)
+        self.assertTrue((ROOT / "carrier/xpad2-installer-anchor.apk").read_bytes().startswith(b"PK"))
+
+    def test_0044_persistence_has_outer_verification_and_whitelist_guard(self):
+        native = (ROOT / "native/xpad_install.c").read_text()
+        java = (ROOT / "exploit/Znxrun0044.java").read_text()
+        direct = (ROOT / "exploit/DirectInstaller.java").read_text()
+        for value in (
+            "prepare_whitelist",
+            "restore_whitelist",
+            "ZNXRUN_STATUS",
+            "installerPackageName=",
+            "run_znxrun_mutation",
+            "forward_guarded_signal",
+        ):
+            self.assertIn(value, native)
+        self.assertIn("DirectInstaller.doInstall(apkPath, ZNXX + \"\\n\" + alias", java)
+        self.assertIn("PackageInstaller.SessionParams.MODE_INHERIT_EXISTING", direct)
+        self.assertNotIn("Settings.Global.putString", java)
 
     def test_extraction_has_no_monorepo_absolute_path(self):
         suffixes = {".c", ".S", ".java", ".sh", ".md", ".py"}

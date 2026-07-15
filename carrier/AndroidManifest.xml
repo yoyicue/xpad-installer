@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Copyright (C) 2026 yoyicue
+  SPDX-License-Identifier: GPL-3.0-only
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.yoyicue.xpad2.installeranchor"
+    android:versionCode="1"
+    android:versionName="1.0">
+
+    <uses-sdk android:minSdkVersion="24" android:targetSdkVersion="35" />
+
+    <application
+        android:allowBackup="false"
+        android:debuggable="false"
+        android:extractNativeLibs="false"
+        android:hasCode="false"
+        android:label="XPad2 Installer Anchor"
+        android:supportsRtl="false" />
+</manifest>

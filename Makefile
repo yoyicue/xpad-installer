@@ -1,12 +1,18 @@
 # Copyright (C) 2026 yoyicue
 # SPDX-License-Identifier: GPL-3.0-only
 
-.PHONY: build test verify package clean
+.PHONY: build carrier verify-carrier test verify package clean
 
 PYTHON ?= python3
 
-build:
+build: verify-carrier
 	./scripts/build_single_elf.sh
+
+carrier:
+	./scripts/sign_carrier_apk.sh
+
+verify-carrier:
+	./scripts/verify_carrier_apk.sh
 
 test:
 	$(PYTHON) -m unittest discover -s tests -v

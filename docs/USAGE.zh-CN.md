@@ -157,7 +157,7 @@ adb -s SERIAL shell getprop ro.product.model
 macOS/Linux 校验：
 
 ```shell
-cd xpad-installer-v0.1.1-android-arm64
+cd xpad-installer-v0.2.0-android-arm64
 shasum -a 256 -c SHA256SUMS
 ```
 
@@ -411,7 +411,50 @@ adb -s SERIAL shell \
 
 适合当前服务已经启动，只想重新配置持久化时使用。首次部署通常直接执行 `activate` 即可。
 
-### 9.10 `znxrun preflight`
+### 9.10 `znxrun status`
+
+```shell
+adb -s SERIAL shell \
+  /data/local/tmp/xpad-install znxrun status
+```
+
+这是纯只读健康检查，不启动 31317，也不修改包状态。输出只有四种状态：
+
+| 状态 | 含义 | 建议 |
+|---|---|---|
+| `healthy` | alias 为 UID 10072，正式 anchor attribution 也完整 | 无需操作 |
+| `legacy` | alias 当前可用，但没有正式 anchor 作为持久化来源 | 执行一次 `znxrun ensure` |
+| `missing` | 当前没有可用 alias | 执行一次 `znxrun ensure` |
+| `invalid` | alias 存在但身份不是预期 UID 10072 | 停止安装并保留日志 |
+
+健康输出示例：
+
+```text
+ZNXRUN_STATUS status=healthy alias=healthy uid=10072 anchor=anchored package=com.yoyicue.xpad2.installeranchor
+```
+
+### 9.11 `znxrun ensure`
+
+```shell
+adb -s SERIAL shell \
+  /data/local/tmp/xpad-install znxrun ensure
+```
+
+这是普通维护应使用的幂等命令，不需要另找 APK：
+
+1. 健康时立即返回，不创建安装事务；
+2. 缺失时从 `xpad-install` 自身取出正式签名的无代码、无权限 anchor；
+3. 临时把 anchor 加入 OEM 安装白名单；
+4. 必要时先安装 anchor，再通过继承更新保存 0044 attribution；
+5. 无论成功失败都恢复原白名单；收到中断信号时由父进程负责恢复并清理临时 runner；
+6. 最终同时验证 attribution 和 `run-as znxrun` 的 UID，才报告成功。
+
+工具不会直接修改 `/data/system/packages.list`。持久化信息保存在 Android 的包元数据中，
+以后 PackageManager 正常重写 `packages.list` 时会重新生成 alias。
+
+`install --backend auto` 和 `upgrade --backend auto` 也会在需要时自动执行同样的修复。
+
+### 9.12 `znxrun preflight`
 
 ```shell
 adb -s SERIAL shell \
@@ -422,13 +465,16 @@ adb -s SERIAL shell \
 
 虽然它不做持久化 alias 写入，但为了从 UID 1000 读取必要信息，仍可能短暂使用 31317。
 
-### 9.11 `znxrun create --apk UPDATE.apk [--apply]`
+### 9.13 `znxrun create --package PACKAGE --apk UPDATE.apk [--apply]`
+
+这是保留给开发者验证非托管 carrier 的底层命令。日常恢复只使用 `znxrun ensure`。
 
 先做 dry-run：
 
 ```shell
 adb -s SERIAL shell \
   /data/local/tmp/xpad-install znxrun create \
+  --package com.example.carrier \
   --apk /sdcard/Download/signed-update.apk
 ```
 
@@ -447,14 +493,17 @@ dry-run 不会证明签名一定兼容；签名证书仍由 Android 在真正提
 ```shell
 adb -s SERIAL shell \
   /data/local/tmp/xpad-install znxrun create \
+  --package com.example.carrier \
   --apk /sdcard/Download/signed-update.apk --apply
 ```
 
-`--apply` 会调用设备特定的 CVE-2024-0044 路径，临时修改安装白名单并创建 PackageInstaller session。源码会在 finally 中恢复原白名单并在失败时 abandon session。
+`--package` 必须与 APK 的真实包名一致。`--apply` 会调用设备特定的 CVE-2024-0044
+路径，临时修改安装白名单，并通过 PackageInstaller + FileBridge 提交继承更新。
+外层监督进程负责恢复白名单；Android 负责在失败时回收/放弃未完成 session。
 
 这是初始化/恢复 UID 10072 alias 的高级命令。小白不要执行 `--apply`，除非维护文档明确要求，并且已经备份现场状态。
 
-### 9.12 内部命令：`serve` 和 `--root-child`
+### 9.14 内部命令：`serve` 和 `--root-child`
 
 源码还包含 `serve` 和 `--root-child`，它们是 `activate` 及临时 root RPC 内部调用的入口：
 
@@ -628,7 +677,7 @@ adb -s SERIAL shell 'pidof zygote64; pidof zygote; pidof system_server; getenfor
 - 安装/31317 运行中不要拔线或强制结束进程。
 - 不要把 ADB 暴露在公共网络。
 - 不要从未知来源下载 APK 或 xpad-install。
-- 不要把 `znxrun --apply` 当成普通安装命令。
+- 日常维护只使用幂等的 `znxrun ensure`；不要把底层 `znxrun create --apply` 当成普通安装命令。
 - 不要在无关设备上试运行。
 - 操作前记录 boot ID、zygote 和 system_server PID，便于判断现场是否稳定。
 
