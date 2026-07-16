@@ -1,7 +1,7 @@
 # Copyright (C) 2026 yoyicue
 # SPDX-License-Identifier: GPL-3.0-only
 
-.PHONY: build carrier verify-carrier test verify package windows-recovery-package clean
+.PHONY: build carrier verify-carrier test verify package windows-recovery-package windows-toolkit-package clean
 
 PYTHON ?= python3
 
@@ -24,6 +24,9 @@ package: test
 
 windows-recovery-package: test
 	./scripts/package_windows_recovery.sh
+
+windows-toolkit-package: test build
+	./tools/package_windows_toolkit.sh
 
 clean:
 	rm -rf dist .pytest_cache tests/__pycache__

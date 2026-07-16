@@ -102,7 +102,7 @@ recovery-key fingerprint. Private key material is never copied into the repo.
 make package
 ```
 
-This produces `dist/xpad-installer-v0.2.2-android-arm64.zip`. The archive
+This produces `dist/xpad-installer-v0.2.4-android-arm64.zip`. The archive
 contains the executable, this README, the Chinese beginner guide, the GPLv3
 license, and a SHA-256 manifest for the executable.
 
@@ -118,8 +118,8 @@ make windows-recovery-package
 ```
 
 This produces
-`dist/xpad-installer-v0.2.2-windows-lockscreen-recovery.zip`. It contains the
-locked v0.2.2 ELF, a one-click batch file, a Chinese guide, the license, and
+`dist/xpad-installer-v0.2.4-windows-lockscreen-recovery.zip`. It contains the
+locked v0.2.4 ELF, a one-click batch file, a Chinese guide, the license, and
 checksums. It intentionally does **not** contain `adb.exe`: users either extract
 it into an existing Android Platform-Tools directory or provide `adb.exe` via
 `PATH`.
@@ -129,6 +129,27 @@ serial, runs only `self-test` and native `cleanup`, accepts exit 75 as requiring
 the planned ordinary reboot, and opens Android's security settings after boot.
 It never clears or creates a PIN, pattern, or password and never writes the raw
 `lockscreen.disabled` secure setting.
+
+## Windows safe-install GUI
+
+The separate beginner-facing Windows toolkit installs a selected APK through
+the same locked `xpad-install` v0.2.4 engine:
+
+```shell
+make windows-toolkit-package
+```
+
+This produces `dist/xpad-safe-install-toolkit-v2.5.0.zip`. The archive includes
+`xpad-safe-install-gui.bat`, the Python GUI, the locked device-side executable,
+the Chinese guide, license, and checksums. It does not bundle `adb.exe`; Android
+Platform-Tools may be placed beside the batch file, in a `platform-tools`
+subdirectory, or on `PATH`.
+
+The GUI enters installation immediately after a successful native `doctor`,
+uses one managed `auto` transaction, and runs cleanup on both success and
+failure. It distinguishes an APK permission-owner conflict from the exit-75
+boot safety breaker, so an ordinary APK defect is no longer reported as a
+mandatory reboot.
 
 ## Deploy and use
 
@@ -162,6 +183,8 @@ library packaged in its APK and does not depend on this directory.
 - `carrier/`: minimal installer-anchor manifest and verified signed APK
 - `docs/`: end-user documentation
 - `scripts/`: reproducible DEX and ELF build scripts
+- `windows-toolkit/`: beginner-facing Windows safe-install GUI and batch launcher
+- `tools/`: release packaging for host-side toolkits
 - `tests/`: standalone source/package integrity checks
 
 This tool is firmware-specific. Do not run it against unrelated devices.
