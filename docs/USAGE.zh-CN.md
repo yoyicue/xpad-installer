@@ -157,7 +157,7 @@ adb -s SERIAL shell getprop ro.product.model
 macOS/Linux 校验：
 
 ```shell
-cd xpad-installer-v0.2.1-android-arm64
+cd xpad-installer-v0.2.2-android-arm64
 shasum -a 256 -c SHA256SUMS
 ```
 
@@ -214,14 +214,15 @@ adb -s SERIAL shell /data/local/tmp/xpad-install doctor
 
 | 字段 | 含义 |
 |---|---|
-| `uid` | 本次受约束操作使用的 Android UID |
-| `transport` | 选中的身份通道，例如 `0044`、`31317` 或临时 root |
+| `XPAD_INSTALL_SELF_TEST` | ELF 内嵌 DEX、正式 anchor 和构建版本是否自检通过 |
+| `uid` | 当前只读诊断进程的 Android UID |
+| `transport` | 固定为 `none`，表示没有选择身份通道 |
 | `selinux` | 当前进程的 SELinux 域 |
-| `znxxservice` | OEM 安装服务是否存在 |
 | `provider` | OEM Provider 后端是否可用 |
-| `direct` | UID 1000 PackageInstaller 后端是否可用 |
+| `ZNXRUN_STATUS` | 0044 备用身份当前状态 |
+| `31317` | 固定为 `not-probed` |
 
-`doctor` 主要用于诊断，但在尚未准备 UID 10072 或临时 root 通道时，可能短暂使用 31317 获得 UID 1000。工具正常退出时会自动清理。
+`doctor`、`verify`、`cleanup` 和 `znxrun status` 都在 native 层提前返回，不会进入 31317。`self-test` 更窄，只读取 ELF 内嵌内容，供 `xpad2 status/verify` 使用。
 
 ### 第二步：把 APK 传到 Download
 
@@ -280,9 +281,9 @@ adb -s SERIAL shell /data/local/tmp/xpad-install --help
 adb -s SERIAL shell /data/local/tmp/xpad-install doctor
 ```
 
-检查当前身份、SELinux 域、OEM `znxxservice` 和安装后端。它不会安装或卸载 APK。
+检查当前身份、SELinux 域、OEM `znxxservice`、0044 状态和 ELF 内嵌内容。它不会安装或卸载 APK。
 
-注意：为完成 UID 1000 侧诊断，它可能创建一个短生命周期的 31317 runner；正常返回后会恢复隐藏设置并停止临时 listener。
+这是只读 native 诊断：不选择 transport、不写系统设置，也不会创建 31317 runner。
 
 ### 9.3 `install`
 
@@ -363,7 +364,7 @@ adb -s SERIAL shell \
 adb -s SERIAL shell /data/local/tmp/xpad-install cleanup
 ```
 
-用于请求清理正常事务涉及的内嵌 DEX、临时 transfer 文件/listener 和 31317 隐藏设置。
+用于请求清理正常事务涉及的内嵌 DEX、临时 transfer 文件/listener，并优先从持久备份精确恢复 31317 之前的隐藏设置。没有备份时，它只会删除能够确认属于本工具的残留 payload，不会覆盖无关设置值。
 
 它不会：
 
@@ -532,9 +533,13 @@ xpad-install 会按环境自动选择：
 
 - 对齐 64/32 位 Zygote；
 - 使用两个牺牲 activity；
-- 删除 `hidden_api_blacklist_exemptions`；
+- 在写入前持久保存 `hidden_api_blacklist_exemptions` 的原始缺失/存在状态和完整值；
+- 每个阶段记录 boot ID、Zygote、system_server、SystemUI PID 和设置元数据；
+- 精确恢复并复核原值；
 - 停止临时 listener 和 runner；
 - 删除 Settings 私有缓存里的临时 DEX/APK。
+
+阶段日志保存在 `/data/local/tmp/.xpad-installer/logs/31317-*.jsonl`。任何核心 PID 变化都会立即停止后续尝试、写入本启动周期熔断标记并返回 75；普通重启前不会再次进入 31317。
 
 ## 11. 如何看日志和退出码
 
@@ -569,6 +574,7 @@ $LASTEXITCODE
 | 66 | starter/APK 路径不存在或不可读/不可执行 |
 | 70 | 内存、fork 或内部执行准备失败 |
 | 74 | DEX/APK 写入或传输失败 |
+| 75 | 核心 PID/boot 状态变化或精确恢复失败；本启动周期禁止继续 31317，必须普通重启 |
 | 77 | 身份、权限、配对或系统配置不满足 |
 | 124 | RPC/操作超时 |
 | 125 | 临时 root RPC 没收到完整返回标记 |

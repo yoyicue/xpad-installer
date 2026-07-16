@@ -18,6 +18,7 @@ external CVE script at a machine-specific path, is not part of this project.
 ## Commands
 
 ```text
+xpad-install self-test
 xpad-install doctor
 xpad-install install [--backend auto|provider|direct] APK
 xpad-install upgrade [--backend auto|provider|direct] APK
@@ -39,8 +40,15 @@ used for normal application updates. If that route cannot be repaired, the
 installer uses the bounded UID 1000/31317 runner as the last fallback. After a
 successful fallback APK commit it immediately repairs and re-verifies 0044; a
 failed repair makes the command report partial failure. The 31317 implementation
-aligns both Zygotes, restores the hidden setting, stops the sacrificial
-activities, and removes transfer artifacts before returning.
+keeps the existing three-attempt policy, durably saves and exactly restores the
+original hidden setting, records every phase and core PID under
+`/data/local/tmp/.xpad-installer/logs`, and opens a per-boot circuit breaker if
+Zygote, system_server, or SystemUI changes. Exit 75 then requires an ordinary
+reboot before another 31317 attempt.
+
+`self-test`, `doctor`, `verify`, `cleanup`, and `znxrun status` are handled by
+the native CLI before transport selection; none of them can acquire a 31317
+runner. `self-test` only validates the locked ELF's embedded DEX and anchor.
 
 `znxrun status` is read-only and reports `healthy`, `legacy`, `missing`, or
 `invalid`. `znxrun ensure` is idempotent: it installs/verifies the signed anchor,
@@ -89,7 +97,7 @@ recovery-key fingerprint. Private key material is never copied into the repo.
 make package
 ```
 
-This produces `dist/xpad-installer-v0.2.1-android-arm64.zip`. The archive
+This produces `dist/xpad-installer-v0.2.2-android-arm64.zip`. The archive
 contains the executable, this README, the Chinese beginner guide, the GPLv3
 license, and a SHA-256 manifest for the executable.
 

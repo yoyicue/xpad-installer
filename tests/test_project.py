@@ -95,8 +95,11 @@ class StandaloneProjectTests(unittest.TestCase):
             "#define PAYLOAD_ENTRY_COUNT 3000",
             'PRIMARY_TRIGGER_PACKAGE "com.android.settings"',
             'SECONDARY_TRIGGER_PACKAGE "com.tal.init.ota"',
-            "cleanup_31317();",
+            "for (int attempt = 1; attempt <= 3; attempt++)",
             "cleanup_system_runner();",
+            "incident_core_check",
+            "trip_circuit_breaker",
+            "finish_hidden_guard",
         )
         for value in expected:
             self.assertIn(value, source)
@@ -104,6 +107,7 @@ class StandaloneProjectTests(unittest.TestCase):
     def test_cli_surface_is_preserved(self):
         source = (ROOT / "native/xpad_install.c").read_text()
         for command in (
+            "self-test",
             "doctor",
             "install",
             "upgrade",
@@ -115,6 +119,38 @@ class StandaloneProjectTests(unittest.TestCase):
             "znxrun ensure",
         ):
             self.assertIn(f'"  xpad-install {command}', source)
+
+    def test_read_only_commands_return_before_any_31317_fallback(self):
+        source = (ROOT / "native/xpad_install.c").read_text()
+        main = source[source.index("int main(int argc, char **argv)") :]
+        fallback = main.index("system_transport(argc, argv)")
+        for branch in (
+            'return native_self_test();',
+            'return native_doctor();',
+            'return native_verify(argc, argv);',
+            'return native_cleanup();',
+            'return znxrun_status(1);',
+        ):
+            self.assertLess(main.index(branch), fallback, branch)
+        self.assertNotIn("cleanup_31317", source)
+
+    def test_31317_state_is_durable_and_exactly_restored(self):
+        source = (ROOT / "native/xpad_install.c").read_text()
+        for value in (
+            'HIDDEN_SETTING_BACKUP',
+            'CIRCUIT_BREAKER',
+            'INCIDENT_LOG_DIR',
+            'settings_get_global_exact',
+            'settings_put_verified',
+            'fsync(incident_fd)',
+            '"core-pid-changed"',
+            'return acquire_rc == 75 ? 75 : 77;',
+        ):
+            self.assertIn(value, source)
+        self.assertNotIn(
+            'settings delete global " HIDDEN_SETTING',
+            source,
+        )
 
     def test_managed_0044_anchor_is_bounded_and_embedded(self):
         manifest = (ROOT / "carrier/AndroidManifest.xml").read_text()
