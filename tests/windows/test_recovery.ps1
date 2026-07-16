@@ -29,12 +29,17 @@ $batch = Get-Content -LiteralPath (Join-Path $Root 'windows/xpad2-lockscreen-rec
     [Text.UTF8Encoding]::new($false))
 
 $fakeProject = Join-Path $Work 'fake-adb-project'
-dotnet new console --output $fakeProject --force | Out-Null
+$fakeOutput = Join-Path $Work 'fake-adb-output'
+dotnet new console --framework net8.0 --output $fakeProject --force | Out-Null
+if ($LASTEXITCODE -ne 0) { throw 'failed to create fake adb project' }
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'FakeAdb.cs') `
     -Destination (Join-Path $fakeProject 'Program.cs') -Force
-dotnet publish $fakeProject --configuration Release --runtime win-x64 `
+dotnet publish (Get-ChildItem -LiteralPath $fakeProject -Filter '*.csproj' -File).FullName `
+    --configuration Release --runtime win-x64 `
     --self-contained false -p:AssemblyName=adb -p:UseAppHost=true `
-    --output $Work | Out-Null
+    --output $fakeOutput
+if ($LASTEXITCODE -ne 0) { throw 'failed to publish fake adb project' }
+Copy-Item -Path (Join-Path $fakeOutput '*') -Destination $Work -Force
 if (-not (Test-Path -LiteralPath (Join-Path $Work 'adb.exe'))) {
     throw 'failed to build fake adb.exe'
 }
