@@ -24,6 +24,10 @@ class StandaloneProjectTests(unittest.TestCase):
             "scripts/verify_carrier_apk.sh",
             "scripts/build_single_elf.sh",
             "scripts/package_release.sh",
+            "scripts/package_windows_recovery.sh",
+            "windows/xpad2-lockscreen-recovery.bat",
+            "tests/windows/FakeAdb.cs",
+            "tests/windows/test_recovery.ps1",
             "tests/test_project.py",
             "Makefile",
         )
@@ -48,7 +52,13 @@ class StandaloneProjectTests(unittest.TestCase):
             "scripts/verify_carrier_apk.sh",
             "scripts/build_single_elf.sh",
             "scripts/package_release.sh",
+            "scripts/package_windows_recovery.sh",
             "docs/USAGE.zh-CN.md",
+            "windows/xpad2-lockscreen-recovery.bat",
+            "windows/README-LOCKSCREEN-RECOVERY.zh-CN.txt",
+            ".github/workflows/windows-recovery.yml",
+            "tests/windows/FakeAdb.cs",
+            "tests/windows/test_recovery.ps1",
             "VERSION",
         )
         for relative in required:
@@ -203,6 +213,44 @@ class StandaloneProjectTests(unittest.TestCase):
             if path.is_file() and path.suffix in suffixes:
                 text = path.read_text(errors="replace")
                 self.assertNotIn(old_root, text, str(path))
+
+    def test_windows_recovery_is_bounded_and_credential_safe(self):
+        batch = (ROOT / "windows/xpad2-lockscreen-recovery.bat").read_text()
+        expected = (
+            "EXPECTED_FINGERPRINT=alps/vnd_ls12_mt8797_wifi_64/",
+            "EXPECTED_TOOL_HASH=9f1ff6b7635548a11c57b2b8a31b0b98b941773bc6e0f2f00a5c3dc98e3a5fc0",
+            "self-test",
+            "cleanup",
+            "locksettings get-disabled --user 0",
+            "locksettings set-disabled --user 0 false",
+            "dumpsys lock_settings",
+            "dumpsys window policy",
+            "hidden_setting_sha256_without_disclosure",
+            "Compress-Archive",
+            "<redacted-serial>",
+            "reboot",
+        )
+        for value in expected:
+            self.assertIn(value, batch, value)
+        forbidden = (
+            " xpad-install doctor",
+            "locksettings clear",
+            "locksettings set-pin",
+            "locksettings set-pattern",
+            "locksettings set-password",
+            "settings put secure",
+            "curl ",
+            "Invoke-WebRequest",
+        )
+        for value in forbidden:
+            self.assertNotIn(value, batch, value)
+
+    def test_windows_recovery_package_excludes_adb(self):
+        package = (ROOT / "scripts/package_windows_recovery.sh").read_text()
+        self.assertIn("START-LOCKSCREEN-RECOVERY.bat", package)
+        self.assertIn("README-FIRST.zh-CN.txt", package)
+        self.assertNotIn("adb.exe", package)
+        self.assertNotIn("platform-tools", package)
 
 
 if __name__ == "__main__":

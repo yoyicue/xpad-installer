@@ -662,6 +662,24 @@ adb -s SERIAL shell 'pidof zygote64; pidof zygote; pidof system_server; getenfor
 
 工具和自动化脚本不应自行重启设备。
 
+### 旧版 `doctor` 后锁屏或 SystemUI 异常
+
+v0.2.1 及更早版本的 `doctor` 没有在 native 诊断后提前返回，可能误入 31317。
+旧代码不直接修改 PIN、图案或锁屏凭据；如果随后出现按电源键唤醒后直接回到
+桌面、锁屏界面消失或 SystemUI 异常，应停止运行旧版命令。
+
+面向不会使用 ADB 的用户，可使用 Release 中的
+`xpad-installer-v0.2.2-windows-lockscreen-recovery.zip`：完整解压到已有的
+Android Platform-Tools 目录，双击 `START-LOCKSCREEN-RECOVERY.bat`。恢复包不
+内含或下载 `adb.exe`。
+
+批处理会在修改前后保存锁屏服务、Keyguard、核心 PID、31317 残留特征、过滤
+日志和 DropBox 崩溃记录，脱敏序列号后生成 `xpad2-lockscreen-recovery-log-*.zip`。
+它只运行 v0.2.2 的 `self-test`/`cleanup`，随后执行一次明确告知用户的普通重启；
+不会清除或创建 PIN、图案、密码，也不会直接写
+`settings secure lockscreen.disabled`。重启后仍需由用户在系统“安全”设置中
+选择滑动、PIN 或图案。
+
 ## 13. 常用 ADB 命令速查
 
 | 命令 | 作用 |

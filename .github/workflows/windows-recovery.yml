@@ -1,0 +1,27 @@
+name: Windows recovery batch
+
+on:
+  push:
+    paths:
+      - '.github/workflows/windows-recovery.yml'
+      - 'windows/**'
+      - 'tests/windows/**'
+  pull_request:
+    paths:
+      - '.github/workflows/windows-recovery.yml'
+      - 'windows/**'
+      - 'tests/windows/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  recovery-batch:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Exercise complete batch flow with fake ADB
+        shell: pwsh
+        run: ./tests/windows/test_recovery.ps1

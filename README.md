@@ -101,6 +101,30 @@ This produces `dist/xpad-installer-v0.2.2-android-arm64.zip`. The archive
 contains the executable, this README, the Chinese beginner guide, the GPLv3
 license, and a SHA-256 manifest for the executable.
 
+## Windows lock-screen recovery package
+
+Devices that ran `doctor` from v0.2.1 or older may have accidentally entered
+the 31317 transport. The current release returns from native `doctor` before
+transport selection. A bounded Windows recovery package for affected `/260`
+devices can be built with:
+
+```shell
+make windows-recovery-package
+```
+
+This produces
+`dist/xpad-installer-v0.2.2-windows-lockscreen-recovery.zip`. It contains the
+locked v0.2.2 ELF, a one-click batch file, a Chinese guide, the license, and
+checksums. It intentionally does **not** contain `adb.exe`: users either extract
+it into an existing Android Platform-Tools directory or provide `adb.exe` via
+`PATH`.
+
+The batch file captures pre/post recovery diagnostics, redacts the device
+serial, runs only `self-test` and native `cleanup`, accepts exit 75 as requiring
+the planned ordinary reboot, and opens Android's security settings after boot.
+It never clears or creates a PIN, pattern, or password and never writes the raw
+`lockscreen.disabled` secure setting.
+
 ## Deploy and use
 
 ```shell
