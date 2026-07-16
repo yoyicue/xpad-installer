@@ -33,8 +33,8 @@ xpad-install znxrun create --package PACKAGE --apk UPDATE.apk [--apply]
 xpad-install cleanup
 ```
 
-Every `install` and `upgrade` verifies and, when needed, repairs the managed UID
-10072/0044 OEM installer identity, then performs the target APK transaction only
+Every `install` and `upgrade` verifies and, when needed, repairs the managed
+0044 OEM installer identity, then performs the target APK transaction only
 through that identity. The persistent source is a dedicated no-code, no-permission
 package named `com.yoyicue.xpad2.installeranchor`, embedded in the ELF and not
 used for normal application updates. If 0044 is missing or broken, the bounded
@@ -54,8 +54,10 @@ validates the locked ELF's embedded DEX and anchor.
 `znxrun status` is read-only and reports `healthy`, `legacy`, `missing`, or
 `invalid`. `znxrun ensure` is idempotent: it installs/verifies the signed anchor,
 persists the exact installer attribution, restores the temporary OEM whitelist,
-and accepts success only after both `dumpsys` attribution and `run-as` UID 10072
-checks pass. It never edits `/data/system/packages.list` directly.
+and accepts success only after both `dumpsys` attribution and the `run-as` UID
+match the real `com.tal.pad.znxxservice` UID reported by PackageManager. That UID
+is device-specific (for example 10070 or 10072), not a protocol constant. It
+never edits `/data/system/packages.list` directly.
 
 `activate` provisions BoomInstaller's local wireless-ADB boot path and starts
 its Shizuku control plane directly as the current root or ADB-shell identity.

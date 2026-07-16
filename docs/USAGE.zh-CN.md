@@ -46,7 +46,7 @@ adb -s SERIAL shell id
 uid=2000(shell) gid=2000(shell) ...
 ```
 
-不要先执行 `adb root`。量产版 Android 一般不支持它，xpad-install 也不依赖它。目标 APK 始终由受管的 UID 10072/0044 身份安装；只有缺失或损坏 0044 时，工具才短暂使用 UID 1000/31317 修复它。
+不要先执行 `adb root`。量产版 Android 一般不支持它，xpad-install 也不依赖它。目标 APK 始终由受管的 0044 身份安装；该身份的 UID 必须等于本机 `com.tal.pad.znxxservice` 的真实 UID，而不是固定数字。只有缺失或损坏 0044 时，工具才短暂使用 UID 1000/31317 修复它。
 
 ## 3. 在电脑上安装 ADB
 
@@ -328,11 +328,11 @@ Android 仍会强制要求：
 
 建议始终先用 `auto`。
 
-如果安装前没有健康的 0044，31317 只负责补回正式 anchor 和 alias。外层再次验证 UID
-10072 后才会把目标 APK 交给 0044；补回失败则直接返回失败，目标 APK 不会经 31317 提交。
+如果安装前没有健康的 0044，31317 只负责补回正式 anchor 和 alias。外层再次验证 alias
+UID 与本机 OEM installer UID 一致后才会把目标 APK 交给 0044；补回失败则直接返回失败，目标 APK 不会经 31317 提交。
 安装过程中若 0044 意外变坏，工具只修复一次并重新走一次 0044。
 
-`direct` 不是“root 强装”，它仍需要健康的 0044/UID 10072 身份和 OEM installer attribution。
+`direct` 不是“root 强装”，它仍需要健康的 0044/OEM installer 身份和 attribution。
 
 ### 9.6 `verify PACKAGE [VERSION_CODE]`
 
@@ -430,15 +430,15 @@ adb -s SERIAL shell \
 
 | 状态 | 含义 | 建议 |
 |---|---|---|
-| `healthy` | alias 为 UID 10072，正式 anchor attribution 也完整 | 无需操作 |
+| `healthy` | alias UID 与本机 OEM installer UID 一致，正式 anchor attribution 也完整 | 无需操作 |
 | `legacy` | alias 当前可用，但没有正式 anchor 作为持久化来源 | 执行一次 `znxrun ensure` |
 | `missing` | 当前没有可用 alias | 执行一次 `znxrun ensure` |
-| `invalid` | alias 存在但身份不是预期 UID 10072 | 停止安装并保留日志 |
+| `invalid` | alias 存在但身份与本机 OEM installer UID 不一致 | 停止安装并保留日志 |
 
 健康输出示例：
 
 ```text
-ZNXRUN_STATUS status=healthy alias=healthy uid=10072 anchor=anchored package=com.yoyicue.xpad2.installeranchor
+ZNXRUN_STATUS status=healthy alias=healthy uid=10070 expected_uid=10070 anchor=anchored package=com.yoyicue.xpad2.installeranchor
 ```
 
 ### 9.11 `znxrun ensure`
@@ -455,7 +455,7 @@ adb -s SERIAL shell \
 3. 临时把 anchor 加入 OEM 安装白名单；
 4. 必要时先安装 anchor，再通过继承更新保存 0044 attribution；
 5. 无论成功失败都恢复原白名单；收到中断信号时由父进程负责恢复并清理临时 runner；
-6. 最终同时验证 attribution 和 `run-as znxrun` 的 UID，才报告成功。
+6. 最终同时验证 attribution、`run-as znxrun` UID 和 PackageManager 报告的本机 OEM installer UID 三者一致，才报告成功。
 
 工具不会直接修改 `/data/system/packages.list`。持久化信息保存在 Android 的包元数据中，
 以后 PackageManager 正常重写 `packages.list` 时会重新生成 alias。
@@ -469,7 +469,7 @@ adb -s SERIAL shell \
   /data/local/tmp/xpad-install znxrun preflight
 ```
 
-高级诊断命令。它计算并打印 UID 10072 的 0044 alias 信息，默认不创建 alias。
+高级诊断命令。它读取本机 OEM installer 的真实 UID，计算并打印对应的 0044 alias 信息，默认不创建 alias。不同设备可能显示 10070、10072 等不同值。
 
 虽然它不做持久化 alias 写入，但为了从 UID 1000 读取必要信息，仍可能短暂使用 31317。
 
@@ -509,7 +509,7 @@ adb -s SERIAL shell \
 路径，临时修改安装白名单，并通过 PackageInstaller + FileBridge 提交继承更新。
 外层监督进程负责恢复白名单；Android 负责在失败时回收/放弃未完成 session。
 
-这是初始化/恢复 UID 10072 alias 的高级命令。小白不要执行 `--apply`，除非维护文档明确要求，并且已经备份现场状态。
+这是初始化/恢复设备专属 OEM installer alias 的高级命令。小白不要执行 `--apply`，除非维护文档明确要求，并且已经备份现场状态。
 
 ### 9.14 内部命令：`serve` 和 `--root-child`
 
@@ -526,7 +526,7 @@ xpad-install 将“安装身份”和“修复手段”严格分开：
 
 | 通道 | 身份 | 用途 |
 |---|---:|---|
-| `0044 run-as znxrun` | UID 10072 | 唯一的目标 APK 安装身份 |
+| `0044 run-as znxrun` | 与本机 `com.tal.pad.znxxservice` UID 一致 | 唯一的目标 APK 安装身份 |
 | `temp_su.sock` | 临时 UID 0 RPC | 仅供明确的内部/维护命令，不安装目标 APK |
 | `31317 system runner` | UID 1000 / `system_app` | 仅在 0044 缺失或失效时补建/修复 0044 |
 

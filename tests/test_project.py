@@ -194,6 +194,19 @@ class StandaloneProjectTests(unittest.TestCase):
         self.assertIn("PackageInstaller.SessionParams.MODE_INHERIT_EXISTING", direct)
         self.assertNotIn("Settings.Global.putString", java)
 
+    def test_managed_0044_identity_tracks_the_device_oem_uid(self):
+        native = (ROOT / "native/xpad_install.c").read_text()
+        java = (ROOT / "exploit/Znxrun0044.java").read_text()
+        status = native[native.index("static int znxrun_status") :]
+        status = status[:status.index("static int rpc")]
+        self.assertIn("lookup_oem_installer_uid", native)
+        self.assertIn("parse_package_uid", native)
+        self.assertIn("alias_uid == expected_uid", status)
+        self.assertIn("expected_uid=%s", status)
+        self.assertIn("app.uid", java)
+        self.assertNotIn("ZNXRUN_ALIAS_LINE", native)
+        self.assertNotIn('!strcmp(uid_output, "10072")', native)
+
     def test_every_apk_operation_uses_0044_and_31317_only_repairs_it(self):
         native = (ROOT / "native/xpad_install.c").read_text()
         java = (ROOT / "exploit/XpadInstaller.java").read_text()

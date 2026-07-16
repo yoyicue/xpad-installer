@@ -35,9 +35,6 @@ extern const unsigned char xpad_anchor_end[];
 #define ANCHOR_APK "/data/local/tmp/.xpad-installer-anchor.apk"
 #define ANCHOR_PACKAGE "com.yoyicue.xpad2.installeranchor"
 #define OEM_INSTALLER "com.tal.pad.znxxservice"
-#define ZNXRUN_ALIAS_LINE \
-  "znxrun 10072 1 /data/user/0/com.tal.pad.znxxservice " \
-  "default:targetSdkVersion=28 none 0 0 1 @null"
 #define ZYGOTE_PORT 8888
 #define TRANSFER_PORT 28889
 #define ZYGOTE_WRITER_SIZE 8192
@@ -661,15 +658,75 @@ static int restore_whitelist(struct whitelist_guard *guard) {
   return rc;
 }
 
+static int parse_uid_text(const char *text, uid_t *uid) {
+  if (!text || !*text || !uid) return -1;
+  errno = 0;
+  char *end = NULL;
+  unsigned long value = strtoul(text, &end, 10);
+  if (errno || end == text || value > UINT_MAX) return -1;
+  while (*end == ' ' || *end == '\t') end++;
+  if (*end != 0) return -1;
+  *uid = (uid_t)value;
+  return 0;
+}
+
+static int parse_package_uid(const char *output, const char *package_name,
+                             uid_t *uid) {
+  if (!output || !package_name || !*package_name || !uid) return -1;
+  char marker[256];
+  int marker_len = snprintf(marker, sizeof(marker), "package:%s uid:", package_name);
+  if (marker_len < 0 || (size_t)marker_len >= sizeof(marker)) return -1;
+
+  const char *line = output;
+  while (*line) {
+    const char *end = strpbrk(line, "\r\n");
+    size_t line_len = end ? (size_t)(end - line) : strlen(line);
+    if (line_len > (size_t)marker_len &&
+        !strncmp(line, marker, (size_t)marker_len)) {
+      size_t value_len = line_len - (size_t)marker_len;
+      char value[32];
+      if (value_len >= sizeof(value)) return -1;
+      memcpy(value, line + marker_len, value_len);
+      value[value_len] = 0;
+      uid_t parsed = 0;
+      if (parse_uid_text(value, &parsed) != 0 || parsed < 10000 || parsed >= 20000)
+        return -1;
+      *uid = parsed;
+      return 0;
+    }
+    if (!end) break;
+    line = end + 1;
+    if (end[0] == '\r' && line[0] == '\n') line++;
+  }
+  return -1;
+}
+
+static int lookup_oem_installer_uid(uid_t *uid) {
+  char *output = NULL;
+  char *const argv[] = {
+    "/system/bin/cmd", "package", "list", "packages", "-U", "--user", "0",
+    OEM_INSTALLER, NULL
+  };
+  int rc = capture_command(argv, &output);
+  int parsed = rc == 0 ? parse_package_uid(output, OEM_INSTALLER, uid) : -1;
+  free(output);
+  return parsed;
+}
+
 static int znxrun_status(int print_status) {
+  uid_t expected_uid = 0;
+  int expected_rc = lookup_oem_installer_uid(&expected_uid);
+
   char *uid_output = NULL;
   char *const uid_argv[] = {
     "/system/bin/run-as", "znxrun", "/system/bin/id", "-u", NULL
   };
   int alias_rc = capture_command(uid_argv, &uid_output);
   if (uid_output) trim_output(uid_output);
-  int alias_healthy = alias_rc == 0 && uid_output && !strcmp(uid_output, "10072");
-  int alias_invalid = alias_rc == 0 && !alias_healthy;
+  uid_t alias_uid = 0;
+  int alias_present = alias_rc == 0 && parse_uid_text(uid_output, &alias_uid) == 0;
+  int alias_healthy = alias_present && expected_rc == 0 && alias_uid == expected_uid;
+  int alias_invalid = alias_present && !alias_healthy;
 
   char *dump = NULL;
   char *const dump_argv[] = {
@@ -677,9 +734,16 @@ static int znxrun_status(int print_status) {
   };
   int dump_rc = capture_command(dump_argv, &dump);
   const char *package_marker = "Package [" ANCHOR_PACKAGE "]";
-  const char *expected_source = "installerPackageName=" OEM_INSTALLER "\n" ZNXRUN_ALIAS_LINE;
   int anchor_installed = dump_rc == 0 && dump && strstr(dump, package_marker);
-  int anchor_persisted = anchor_installed && strstr(dump, expected_source);
+  char expected_source[512];
+  int expected_len = expected_rc == 0 ? snprintf(
+      expected_source, sizeof(expected_source),
+      "installerPackageName=" OEM_INSTALLER "\n"
+      "znxrun %u 1 /data/user/0/" OEM_INSTALLER " "
+      "default:targetSdkVersion=28 none 0 0 1 @null",
+      (unsigned)expected_uid) : -1;
+  int anchor_persisted = anchor_installed && expected_len > 0 &&
+      (size_t)expected_len < sizeof(expected_source) && strstr(dump, expected_source);
 
   const char *status = alias_healthy && anchor_persisted ? "healthy" :
       alias_invalid ? "invalid" : alias_healthy ? "legacy" : "missing";
@@ -687,8 +751,14 @@ static int znxrun_status(int print_status) {
   const char *anchor = anchor_persisted ? "anchored" :
       anchor_installed ? "unanchored" : "missing";
   if (print_status) {
-    printf("ZNXRUN_STATUS status=%s alias=%s uid=%s anchor=%s package=%s\n",
-           status, alias, alias_healthy ? "10072" : "none", anchor, ANCHOR_PACKAGE);
+    char actual_value[32] = "none";
+    char expected_value[32] = "unavailable";
+    if (alias_present) snprintf(actual_value, sizeof(actual_value), "%u", (unsigned)alias_uid);
+    if (expected_rc == 0)
+      snprintf(expected_value, sizeof(expected_value), "%u", (unsigned)expected_uid);
+    printf("ZNXRUN_STATUS status=%s alias=%s uid=%s expected_uid=%s "
+           "anchor=%s package=%s\n",
+           status, alias, actual_value, expected_value, anchor, ANCHOR_PACKAGE);
   }
   free(uid_output);
   free(dump);
@@ -1295,8 +1365,19 @@ static int ionstack_delegate(int argc, char **argv) {
 static int native_self_test(void) {
   size_t dex_size = (size_t)(xpad_dex_end - xpad_dex_start);
   size_t anchor_size = (size_t)(xpad_anchor_end - xpad_anchor_start);
+  uid_t parsed_10070 = 0, parsed_10072 = 0, rejected = 0;
+  int uid_parser_valid =
+      parse_package_uid("package:" OEM_INSTALLER " uid:10070\n",
+                        OEM_INSTALLER, &parsed_10070) == 0 &&
+      parsed_10070 == 10070 &&
+      parse_package_uid("package:" OEM_INSTALLER " uid:10072\n",
+                        OEM_INSTALLER, &parsed_10072) == 0 &&
+      parsed_10072 == 10072 &&
+      parse_package_uid("package:" OEM_INSTALLER ".other uid:10070\n",
+                        OEM_INSTALLER, &rejected) != 0;
   int valid = dex_size >= 8 && !memcmp(xpad_dex_start, "dex\n", 4) &&
-      anchor_size >= 4 && !memcmp(xpad_anchor_start, "PK\003\004", 4);
+      anchor_size >= 4 && !memcmp(xpad_anchor_start, "PK\003\004", 4) &&
+      uid_parser_valid;
   printf("XPAD_INSTALL_SELF_TEST status=%s version=%s dex_size=%zu anchor_size=%zu\n",
          valid ? "ok" : "failed", XPAD_INSTALL_VERSION, dex_size, anchor_size);
   return valid ? 0 : 1;
@@ -1448,12 +1529,12 @@ static void usage(FILE *out) {
       "  Put APKs under /sdcard/Download so the znxxservice Provider can read them.\n"
       "\n"
       "APK installation identity:\n"
-      "  0044 run-as znxrun (uid 10072) for every APK operation\n"
+      "  0044 run-as znxrun (uid matches the device's OEM installer) for every APK operation\n"
       "  CVE-2024-31317 is used only to repair a missing/broken 0044 identity\n"
       "\n"
       "Backends:\n"
       "  auto      Prefer the OEM znxxservice Provider inside the 0044 identity.\n"
-      "  provider  Ask the real znxxservice (UID 10072) to install the APK. Recommended.\n"
+      "  provider  Ask the real znxxservice identity to install the APK. Recommended.\n"
       "  direct    Create a PackageInstaller session inside the 0044 identity.\n"
       "\n"
       "Examples:\n"
