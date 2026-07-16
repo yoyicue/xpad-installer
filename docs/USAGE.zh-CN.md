@@ -157,7 +157,7 @@ adb -s SERIAL shell getprop ro.product.model
 macOS/Linux 校验：
 
 ```shell
-cd xpad-installer-v0.2.6-android-arm64
+cd xpad-installer-v0.2.7-android-arm64
 shasum -a 256 -c SHA256SUMS
 ```
 
@@ -460,7 +460,7 @@ adb -s SERIAL shell \
 工具不会直接修改 `/data/system/packages.list`。持久化信息保存在 Android 的包元数据中，
 以后 PackageManager 正常重写 `packages.list` 时会重新生成 alias。
 
-从 v0.2.6 起，正式 anchor 使用 versionCode 2。这样遇到“attribution 已持久化、alias
+从 v0.2.7 起，正式 anchor 使用 versionCode 2。这样遇到“attribution 已持久化、alias
 尚未物化”的现场时，修复会用 full update 形成一次真实升级；同版本修复仍使用
 inherit-existing。提交后最多按秒轮询 60 秒，同时验证 alias、实际 UID 和 attribution，
 并每五秒记录一次等待进度；

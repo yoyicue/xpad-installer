@@ -28,9 +28,9 @@ except ModuleNotFoundError:  # Pure classification tests may run without Tk inst
     messagebox = None
     ttk = None
 
-VERSION = "2.6.0"
+VERSION = "2.7.0"
 BASE = Path(__file__).resolve().parent
-TOOL_SHA256 = "288a91b83ff1b77fa19fde00c6ddb2feb38693e82bb4652ee00a54c4b55fa67e"
+TOOL_SHA256 = "ae3937467217c1a02b166ebe92f20fb57a00a9739db56a8479d09ad913a73b2a"
 REMOTE_TOOL = "/data/local/tmp/xpad-install"
 REMOTE_APK = "/data/local/tmp/xpad-target.apk"
 PACKAGE_RE = re.compile(r"package=([A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)+)")

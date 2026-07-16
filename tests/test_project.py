@@ -221,7 +221,7 @@ class StandaloneProjectTests(unittest.TestCase):
             "installerPackageName=",
             "run_znxrun_mutation",
             "forward_guarded_signal",
-            "wait_znxrun_healthy(61, 1000000)",
+            "wait_znxrun_healthy(301, 1000000)",
             "ZNXRUN_SETTLE result=pending",
             "ZNXRUN_SETTLE",
         ):
@@ -257,7 +257,8 @@ class StandaloneProjectTests(unittest.TestCase):
         self.assertNotIn("system_transport", install_path)
         self.assertNotIn("ionstack_delegate", install_path)
         self.assertIn("if (znxrun_status(0) == 0) return 0;", native)
-        self.assertIn("if (ensure_znxrun(executable) != 0)", native)
+        self.assertIn("int repair = ensure_znxrun(executable)", native)
+        self.assertIn("repair == ZNXRUN_ENSURE_PENDING", native)
         self.assertIn("if (!ok && Process.myUid() != 0)", java)
         self.assertIn("provider did not commit; trying direct backend in current identity", java)
 

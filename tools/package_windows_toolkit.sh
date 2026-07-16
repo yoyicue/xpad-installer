@@ -5,12 +5,12 @@
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-VERSION=2.6.0
+VERSION=2.7.0
 SOURCE="$ROOT/windows-toolkit"
 DIST="$ROOT/dist"
 NAME="xpad-safe-install-toolkit-v$VERSION"
 ZIP="$DIST/$NAME.zip"
-EXPECTED_TOOL_SHA=288a91b83ff1b77fa19fde00c6ddb2feb38693e82bb4652ee00a54c4b55fa67e
+EXPECTED_TOOL_SHA=ae3937467217c1a02b166ebe92f20fb57a00a9739db56a8479d09ad913a73b2a
 
 sha256_file() {
   if command -v sha256sum >/dev/null 2>&1; then

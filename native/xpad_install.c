@@ -783,6 +783,8 @@ static int wait_znxrun_healthy(int attempts, useconds_t interval_us) {
   return 1;
 }
 
+#define ZNXRUN_ENSURE_PENDING 76
+
 static int rpc(const char *command, int timeout_seconds) {
   int fd = connect_tcp(ZYGOTE_PORT);
   if (fd < 0) return 127;
@@ -1626,10 +1628,11 @@ cleanup:
       (!strcmp(argv[2], "create") || !strcmp(argv[2], "ensure"));
   for (int i = 3; verify_znxrun && i < argc; i++)
     if (!strcmp(argv[i], "--apply")) {
-      if (rc == 0 && wait_znxrun_healthy(61, 1000000) != 0) {
+      if (rc == 0 && wait_znxrun_healthy(301, 1000000) != 0) {
         fprintf(stderr,
                 "xpad-install: 0044 commit returned success but bounded health verification timed out\n");
-        return 1;
+        puts("repair_committed=true");
+        return ZNXRUN_ENSURE_PENDING;
       }
       break;
     }
@@ -1708,8 +1711,11 @@ static int ensure_znxrun(const char *executable) {
   int rc = run_znxrun_mutation(6, ensure_argv, ANCHOR_PACKAGE);
   unlink(ANCHOR_APK);
   int status_rc = znxrun_status(1);
+  if (rc == ZNXRUN_ENSURE_PENDING && status_rc == 0) rc = 0;
   if (rc == 0 && status_rc != 0) rc = 1;
-  printf("ZNXRUN_ENSURE result=%s\n", rc == 0 ? "repaired" : "failed");
+  printf("ZNXRUN_ENSURE result=%s\n",
+         rc == 0 ? "repaired" :
+         rc == ZNXRUN_ENSURE_PENDING ? "pending" : "failed");
   return rc;
 }
 
@@ -1720,7 +1726,14 @@ static int finalize_apk_persistence(const char *executable, int rc,
   fprintf(stderr,
           "xpad-install: %s APK commit degraded 0044 persistence; repairing\n",
           transport);
-  if (ensure_znxrun(executable) != 0) {
+  int repair = ensure_znxrun(executable);
+  if (repair == ZNXRUN_ENSURE_PENDING) {
+    puts("target_apk_installed=true");
+    fprintf(stderr,
+            "xpad-install: APK installed; managed 0044 repair is still pending\n");
+    return repair;
+  }
+  if (repair != 0) {
     fprintf(stderr,
             "xpad-install: APK installed but managed 0044 repair failed\n");
     return 1;
@@ -1769,6 +1782,12 @@ static int install_via_managed_0044(int argc, char **argv) {
     fprintf(stderr,
             "xpad-install: managed 0044 is unavailable; repairing it before installation\n");
     int repair = ensure_znxrun(argv[0]);
+    if (repair == ZNXRUN_ENSURE_PENDING) {
+      puts("target_apk_installed=false");
+      fprintf(stderr,
+              "xpad-install: 0044 repair is still pending; target APK was not installed\n");
+      return repair;
+    }
     if (repair != 0) {
       fprintf(stderr,
               "xpad-install: 0044 repair failed; target APK was not installed\n");

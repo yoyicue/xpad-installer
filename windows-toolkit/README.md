@@ -1,4 +1,4 @@
-# xpad 安全安装工具 v2.6.0
+# xpad 安全安装工具 v2.7.0
 
 面向 Windows 小白用户的 GUI 安装器，仅用于本人拥有或已获得授权的 XPad2 设备。
 
@@ -9,11 +9,11 @@
 3. 双击 `xpad-safe-install-gui.bat`。
 4. 选择设备 SN 和 APK，点击“安装”。
 
-工具包不内置 `adb.exe`。设备端安装引擎固定为 `xpad-install` v0.2.6，并在运行前校验
+工具包不内置 `adb.exe`。设备端安装引擎固定为 `xpad-install` v0.2.7，并在运行前校验
 SHA-256。程序会保存完整时间戳日志，但不在固定的 `doctor` 后空等 10 秒，也不会在
 `auto` 已经回退 direct 后再次重复安装。
 
-v0.2.6 使用 versionCode 2 的正式 installer anchor；版本推进使用 full update，
+v0.2.7 使用 versionCode 2 的正式 installer anchor；版本推进使用 full update，
 同版本修复使用 inherit-existing，并在 0044 提交后最多按秒轮询 60 秒。这样
 `anchor=anchored` 但 alias 尚未物化时，不会只检查一次就误判失败。
 
