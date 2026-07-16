@@ -28,9 +28,16 @@ $batch = Get-Content -LiteralPath (Join-Path $Root 'windows/xpad2-lockscreen-rec
     ($batch -replace "`r?`n", "`r`n"),
     [Text.UTF8Encoding]::new($false))
 
-$fakeSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'FakeAdb.cs') -Raw
-Add-Type -TypeDefinition $fakeSource -Language CSharp `
-    -OutputAssembly (Join-Path $Work 'adb.exe') -OutputType ConsoleApplication
+$fakeProject = Join-Path $Work 'fake-adb-project'
+dotnet new console --output $fakeProject --force | Out-Null
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'FakeAdb.cs') `
+    -Destination (Join-Path $fakeProject 'Program.cs') -Force
+dotnet publish $fakeProject --configuration Release --runtime win-x64 `
+    --self-contained false -p:AssemblyName=adb -p:UseAppHost=true `
+    --output $Work | Out-Null
+if (-not (Test-Path -LiteralPath (Join-Path $Work 'adb.exe'))) {
+    throw 'failed to build fake adb.exe'
+}
 
 $stdout = Join-Path $Work 'batch-stdout.txt'
 $stderr = Join-Path $Work 'batch-stderr.txt'
