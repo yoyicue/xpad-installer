@@ -3,7 +3,7 @@ rem Copyright (C) 2026 yoyicue
 rem SPDX-License-Identifier: GPL-3.0-only
 setlocal
 chcp 65001 >nul
-title xpad safe install tool v2.5.0
+title xpad safe install tool v2.5.1
 pushd "%~dp0" || (echo [ERROR] Cannot enter toolkit directory.& pause & exit /b 1)
 
 where py >nul 2>nul && (py -3 "%~dp0xpad-safe-install-gui.py" & goto :done)

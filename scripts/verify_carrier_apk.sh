@@ -35,7 +35,7 @@ find_tool() {
 AAPT2=$(find_tool aapt2)
 APKSIGNER=$(find_tool apksigner)
 badging=$("$AAPT2" dump badging "$APK")
-[[ "$badging" == *"package: name='$EXPECTED_PACKAGE' versionCode='1'"* ]]
+[[ "$badging" == *"package: name='$EXPECTED_PACKAGE' versionCode='2'"* ]]
 [[ "$badging" == *"application-label:'XPad2 Installer Anchor'"* ]]
 permissions=$("$AAPT2" dump permissions "$APK")
 [[ "$permissions" != *"uses-permission:"* ]]
@@ -45,5 +45,5 @@ verification=$("$APKSIGNER" verify --verbose --print-certs "$APK")
 [[ "$verification" == *"Verified using v3 scheme (APK Signature Scheme v3): true"* ]]
 actual_cert=$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' <<<"$verification")
 [[ "$actual_cert" == "$EXPECTED_CERT_SHA256" ]]
-printf 'XPAD2_ANCHOR_VERIFY_OK package=%s versionCode=1 cert_sha256=%s\n' \
+printf 'XPAD2_ANCHOR_VERIFY_OK package=%s versionCode=2 cert_sha256=%s\n' \
   "$EXPECTED_PACKAGE" "$actual_cert"

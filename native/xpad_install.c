@@ -765,6 +765,18 @@ static int znxrun_status(int print_status) {
   return !strcmp(status, "healthy") ? 0 : 1;
 }
 
+static int wait_znxrun_healthy(int attempts, useconds_t interval_us) {
+  for (int attempt = 1; attempt <= attempts; attempt++) {
+    if (znxrun_status(0) == 0) {
+      dprintf(STDOUT_FILENO, "ZNXRUN_SETTLE result=healthy attempt=%d\n", attempt);
+      return 0;
+    }
+    if (attempt < attempts) usleep(interval_us);
+  }
+  dprintf(STDOUT_FILENO, "ZNXRUN_SETTLE result=timeout attempts=%d\n", attempts);
+  return 1;
+}
+
 static int rpc(const char *command, int timeout_seconds) {
   int fd = connect_tcp(ZYGOTE_PORT);
   if (fd < 0) return 127;
@@ -1608,8 +1620,9 @@ cleanup:
       (!strcmp(argv[2], "create") || !strcmp(argv[2], "ensure"));
   for (int i = 3; verify_znxrun && i < argc; i++)
     if (!strcmp(argv[i], "--apply")) {
-      if (rc == 0 && system("/system/bin/run-as znxrun /system/bin/id") != 0) {
-        fprintf(stderr, "xpad-install: 0044 commit returned success but run-as verification failed\n");
+      if (rc == 0 && wait_znxrun_healthy(26, 200000) != 0) {
+        fprintf(stderr,
+                "xpad-install: 0044 commit returned success but bounded health verification timed out\n");
         return 1;
       }
       break;

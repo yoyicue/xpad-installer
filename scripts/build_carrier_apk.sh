@@ -39,8 +39,8 @@ trap 'rm -rf "$WORK"' EXIT HUP INT TERM
   --manifest "$ROOT/carrier/AndroidManifest.xml" \
   --min-sdk-version 24 \
   --target-sdk-version 35 \
-  --version-code 1 \
-  --version-name 1.0 \
+  --version-code 2 \
+  --version-name 2.0 \
   -o "$WORK/unaligned.apk"
 
 mkdir -p "$(dirname "$OUTPUT")"

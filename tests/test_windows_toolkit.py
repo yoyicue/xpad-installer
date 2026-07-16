@@ -16,6 +16,13 @@ SPEC.loader.exec_module(MODULE)
 
 
 class WindowsToolkitTests(unittest.TestCase):
+    def test_toolkit_locks_v025_engine(self):
+        self.assertEqual(MODULE.VERSION, "2.5.1")
+        self.assertEqual(
+            MODULE.TOOL_SHA256,
+            "cd21bb7b4df089361e45b72096e11aa639ec57675e6012097341dfc14ee9f388",
+        )
+
     def test_permission_conflict_is_not_misclassified_as_reboot(self):
         advice = MODULE.classify_install_failure(
             "Status=1: -126: attempting to redeclare permission group already owned by other", 1

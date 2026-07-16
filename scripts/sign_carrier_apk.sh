@@ -87,7 +87,7 @@ rm -f "$OUTPUT"
   "$WORK/unsigned.apk"
 
 badging=$("$AAPT2" dump badging "$OUTPUT")
-[[ "$badging" == *"package: name='$EXPECTED_PACKAGE' versionCode='1'"* ]] ||
+[[ "$badging" == *"package: name='$EXPECTED_PACKAGE' versionCode='2'"* ]] ||
   die signed-package-mismatch
 verification=$("$APKSIGNER" verify --verbose --print-certs "$OUTPUT")
 [[ "$verification" == *"Verified using v2 scheme (APK Signature Scheme v2): true"* ]] ||
@@ -97,5 +97,6 @@ verification=$("$APKSIGNER" verify --verbose --print-certs "$OUTPUT")
 actual_cert=$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' <<<"$verification")
 [[ "$actual_cert" == "$EXPECTED_CERT_SHA256" ]] || die signer-mismatch
 
+chmod 0644 "$OUTPUT"
 unset XPAD2_ANCHOR_PASSWORD
 printf 'XPAD2_ANCHOR_SIGN_OK cert_sha256=%s output=%s\n' "$actual_cert" "$OUTPUT"

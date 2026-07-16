@@ -40,6 +40,11 @@ package named `com.yoyicue.xpad2.installeranchor`, embedded in the ELF and not
 used for normal application updates. If 0044 is missing or broken, the bounded
 UID 1000/31317 runner is used only to repair 0044. The target APK is not handed
 to 31317: repair must pass the outer 0044 health check before installation starts.
+The v0.2.5 anchor advances to versionCode 2 so a repair of already-persisted
+attribution is a material PackageManager update, then polls full alias/UID/source
+health for at most five seconds instead of treating the first `run-as` miss as
+final. The version advance uses a full update; same-version repairs retain the
+bounded inherit-existing transaction.
 The 31317 repair implementation keeps the existing three-attempt policy, durably
 saves and exactly restores the original hidden setting, records every phase and core PID under
 `/data/local/tmp/.xpad-installer/logs`, and opens a per-boot circuit breaker if
@@ -102,7 +107,7 @@ recovery-key fingerprint. Private key material is never copied into the repo.
 make package
 ```
 
-This produces `dist/xpad-installer-v0.2.4-android-arm64.zip`. The archive
+This produces `dist/xpad-installer-v0.2.5-android-arm64.zip`. The archive
 contains the executable, this README, the Chinese beginner guide, the GPLv3
 license, and a SHA-256 manifest for the executable.
 
@@ -117,9 +122,9 @@ devices can be built with:
 make windows-recovery-package
 ```
 
-This produces
-`dist/xpad-installer-v0.2.4-windows-lockscreen-recovery.zip`. It contains the
-locked v0.2.4 ELF, a one-click batch file, a Chinese guide, the license, and
+This produces the separately frozen
+`dist/xpad-installer-v0.2.2-windows-lockscreen-recovery.zip`. It contains the
+locked v0.2.2 recovery ELF, a one-click batch file, a Chinese guide, the license, and
 checksums. It intentionally does **not** contain `adb.exe`: users either extract
 it into an existing Android Platform-Tools directory or provide `adb.exe` via
 `PATH`.
@@ -133,13 +138,13 @@ It never clears or creates a PIN, pattern, or password and never writes the raw
 ## Windows safe-install GUI
 
 The separate beginner-facing Windows toolkit installs a selected APK through
-the same locked `xpad-install` v0.2.4 engine:
+the same locked `xpad-install` v0.2.5 engine:
 
 ```shell
 make windows-toolkit-package
 ```
 
-This produces `dist/xpad-safe-install-toolkit-v2.5.0.zip`. The archive includes
+This produces `dist/xpad-safe-install-toolkit-v2.5.1.zip`. The archive includes
 `xpad-safe-install-gui.bat`, the Python GUI, the locked device-side executable,
 the Chinese guide, license, and checksums. It does not bundle `adb.exe`; Android
 Platform-Tools may be placed beside the batch file, in a `platform-tools`

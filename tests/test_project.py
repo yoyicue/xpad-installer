@@ -175,6 +175,7 @@ class StandaloneProjectTests(unittest.TestCase):
         self.assertIn('package="com.yoyicue.xpad2.installeranchor"', manifest)
         self.assertIn('android:hasCode="false"', manifest)
         self.assertIn('android:debuggable="false"', manifest)
+        self.assertIn('android:versionCode="2"', manifest)
         self.assertNotIn("uses-permission", manifest)
         self.assertNotIn("<activity", manifest)
         self.assertNotIn("<service", manifest)
@@ -196,9 +197,13 @@ class StandaloneProjectTests(unittest.TestCase):
             "installerPackageName=",
             "run_znxrun_mutation",
             "forward_guarded_signal",
+            "wait_znxrun_healthy(26, 200000)",
+            "ZNXRUN_SETTLE",
         ):
             self.assertIn(value, native)
         self.assertIn("DirectInstaller.doInstall(apkPath, ZNXX + \"\\n\" + alias", java)
+        self.assertIn('sameVersion ? "inherit-repair" : "full-upgrade"', java)
+        self.assertIn("String inheritPackage = sameVersion ? archive.packageName : null", java)
         self.assertIn("PackageInstaller.SessionParams.MODE_INHERIT_EXISTING", direct)
         self.assertNotIn("Settings.Global.putString", java)
 
