@@ -17,10 +17,10 @@ SPEC.loader.exec_module(MODULE)
 
 class WindowsToolkitTests(unittest.TestCase):
     def test_toolkit_locks_current_engine(self):
-        self.assertEqual(MODULE.VERSION, "2.7.0")
+        self.assertEqual(MODULE.VERSION, "2.8.0")
         self.assertEqual(
             MODULE.TOOL_SHA256,
-            "ae3937467217c1a02b166ebe92f20fb57a00a9739db56a8479d09ad913a73b2a",
+            "72edffd5b6f0b2b9fc111fbac4d6f19ce2a16e755b205eb1cebaf38c59d0d7aa",
         )
 
     def test_permission_conflict_is_not_misclassified_as_reboot(self):

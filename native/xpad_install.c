@@ -1628,7 +1628,7 @@ cleanup:
       (!strcmp(argv[2], "create") || !strcmp(argv[2], "ensure"));
   for (int i = 3; verify_znxrun && i < argc; i++)
     if (!strcmp(argv[i], "--apply")) {
-      if (rc == 0 && wait_znxrun_healthy(301, 1000000) != 0) {
+      if (rc == 0 && wait_znxrun_healthy(61, 5000000) != 0) {
         fprintf(stderr,
                 "xpad-install: 0044 commit returned success but bounded health verification timed out\n");
         puts("repair_committed=true");

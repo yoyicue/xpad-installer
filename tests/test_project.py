@@ -221,7 +221,7 @@ class StandaloneProjectTests(unittest.TestCase):
             "installerPackageName=",
             "run_znxrun_mutation",
             "forward_guarded_signal",
-            "wait_znxrun_healthy(301, 1000000)",
+            "wait_znxrun_healthy(61, 5000000)",
             "ZNXRUN_SETTLE result=pending",
             "ZNXRUN_SETTLE",
         ):
