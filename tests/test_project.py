@@ -194,17 +194,41 @@ class StandaloneProjectTests(unittest.TestCase):
         self.assertIn("PackageInstaller.SessionParams.MODE_INHERIT_EXISTING", direct)
         self.assertNotIn("Settings.Global.putString", java)
 
-    def test_auto_prioritizes_0044_and_repairs_it_after_fallback(self):
+    def test_every_apk_operation_uses_0044_and_31317_only_repairs_it(self):
         native = (ROOT / "native/xpad_install.c").read_text()
         java = (ROOT / "exploit/XpadInstaller.java").read_text()
-        self.assertIn('if (strcmp(backend, "direct"))', native)
-        self.assertIn('finalize_apk_persistence(argv[0], system_rc, "31317")', native)
-        self.assertIn("trying managed 0044 installer identity first", native)
-        self.assertIn("using final UID 1000/31317 fallback", native)
+        install_path = native[native.index("static int install_via_managed_0044") :]
+        install_path = install_path[:install_path.index("int main(")]
+        self.assertIn("ensure_znxrun(argv[0])", install_path)
+        self.assertIn("run_java_as_znxrun", install_path)
+        self.assertIn("target APK was not installed", install_path)
+        self.assertIn("31317 target-APK fallback is disabled", install_path)
+        self.assertNotIn("system_transport", install_path)
+        self.assertNotIn("ionstack_delegate", install_path)
         self.assertIn("if (znxrun_status(0) == 0) return 0;", native)
         self.assertIn("if (ensure_znxrun(executable) != 0)", native)
         self.assertIn("if (!ok && Process.myUid() != 0)", java)
         self.assertIn("provider did not commit; trying direct backend in current identity", java)
+
+    def test_unknown_commands_cannot_reach_a_privileged_transport(self):
+        native = (ROOT / "native/xpad_install.c").read_text()
+        main = native[native.index("int main(int argc, char **argv)") :]
+        rejection = main.index("xpad-install: unknown command")
+        self.assertLess(rejection, main.index("ionstack_delegate(argc, argv)"))
+        self.assertLess(rejection, main.index("system_transport(argc, argv)"))
+        self.assertIn('!strcmp(argv[1], "--version")', main)
+
+    def test_boominstaller_activation_never_uses_installer_identities(self):
+        source = (ROOT / "native/xpad_install.c").read_text()
+        main = source[source.index("int main(int argc, char **argv)") :]
+        activate = main[main.index('if (!strcmp(argv[1], "activate"))') :]
+        activate = activate[:activate.index(
+            'if (!strcmp(argv[1], "install")')]
+        self.assertIn("return serve(argc - 1, argv + 1);", activate)
+        self.assertNotIn("activate_as_znxrun", source)
+        self.assertNotIn("activate_as_system", source)
+        self.assertIn("uid != 0 && uid != 2000", source)
+        self.assertNotIn("acquire_31317", activate)
 
     def test_extraction_has_no_monorepo_absolute_path(self):
         suffixes = {".c", ".S", ".java", ".sh", ".md", ".py"}

@@ -19,6 +19,7 @@ external CVE script at a machine-specific path, is not part of this project.
 
 ```text
 xpad-install self-test
+xpad-install --version
 xpad-install doctor
 xpad-install install [--backend auto|provider|direct] APK
 xpad-install upgrade [--backend auto|provider|direct] APK
@@ -32,23 +33,23 @@ xpad-install znxrun create --package PACKAGE --apk UPDATE.apk [--apply]
 xpad-install cleanup
 ```
 
-`auto` first verifies and, when needed, repairs the managed UID 10072/0044 OEM
-installer identity, then always tries that identity before temporary root or
-the riskier 31317 runner. The persistent source is a dedicated no-code, no-permission
+Every `install` and `upgrade` verifies and, when needed, repairs the managed UID
+10072/0044 OEM installer identity, then performs the target APK transaction only
+through that identity. The persistent source is a dedicated no-code, no-permission
 package named `com.yoyicue.xpad2.installeranchor`, embedded in the ELF and not
-used for normal application updates. If that route cannot be repaired, the
-installer uses the bounded UID 1000/31317 runner as the last fallback. After a
-successful fallback APK commit it immediately repairs and re-verifies 0044; a
-failed repair makes the command report partial failure. The 31317 implementation
-keeps the existing three-attempt policy, durably saves and exactly restores the
-original hidden setting, records every phase and core PID under
+used for normal application updates. If 0044 is missing or broken, the bounded
+UID 1000/31317 runner is used only to repair 0044. The target APK is not handed
+to 31317: repair must pass the outer 0044 health check before installation starts.
+The 31317 repair implementation keeps the existing three-attempt policy, durably
+saves and exactly restores the original hidden setting, records every phase and core PID under
 `/data/local/tmp/.xpad-installer/logs`, and opens a per-boot circuit breaker if
 Zygote, system_server, or SystemUI changes. Exit 75 then requires an ordinary
 reboot before another 31317 attempt.
 
-`self-test`, `doctor`, `verify`, `cleanup`, and `znxrun status` are handled by
+`--version`, `self-test`, `doctor`, `verify`, `cleanup`, and `znxrun status` are handled by
 the native CLI before transport selection; none of them can acquire a 31317
-runner. `self-test` only validates the locked ELF's embedded DEX and anchor.
+runner. Unknown commands also fail before transport selection. `self-test` only
+validates the locked ELF's embedded DEX and anchor.
 
 `znxrun status` is read-only and reports `healthy`, `legacy`, `missing`, or
 `invalid`. `znxrun ensure` is idempotent: it installs/verifies the signed anchor,
@@ -56,9 +57,11 @@ persists the exact installer attribution, restores the temporary OEM whitelist,
 and accepts success only after both `dumpsys` attribution and `run-as` UID 10072
 checks pass. It never edits `/data/system/packages.list` directly.
 
-`activate` starts BoomInstaller using UID 10072, root, or UID 1000 as
-available. `autostart enable` provisions BoomInstaller's local wireless-ADB
-boot path.
+`activate` provisions BoomInstaller's local wireless-ADB boot path and starts
+its Shizuku control plane directly as the current root or ADB-shell identity.
+It never enters 0044 or 31317: those identities belong only to APK installation.
+The normal installer path uses only managed 0044 for the target APK. The guarded
+31317 transaction may repair 0044, but never becomes a target-APK fallback.
 
 ## Build
 

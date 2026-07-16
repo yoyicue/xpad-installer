@@ -695,11 +695,6 @@ static int znxrun_status(int print_status) {
   return !strcmp(status, "healthy") ? 0 : 1;
 }
 
-static int sh(const char *command) {
-  char *const argv[] = {"/system/bin/sh", "-c", (char *)command, NULL};
-  return run_command(argv);
-}
-
 static int rpc(const char *command, int timeout_seconds) {
   int fd = connect_tcp(ZYGOTE_PORT);
   if (fd < 0) return 127;
@@ -1224,8 +1219,8 @@ static int serve(int argc, char **argv) {
   int rc = parse_service_args(argc, argv, &starter, &apk);
   if (rc != 0) return rc;
   uid_t uid = getuid();
-  if (uid != 0 && uid != 1000 && uid != 10072) {
-    fprintf(stderr, "xpad-install: serve requires uid 0, 1000, or 10072 (current uid=%d)\n", uid);
+  if (uid != 0 && uid != 2000) {
+    fprintf(stderr, "xpad-install: serve requires root or adb shell (current uid=%d)\n", uid);
     return 77;
   }
   char apk_arg[2048];
@@ -1234,49 +1229,6 @@ static int serve(int argc, char **argv) {
   execv(starter, child);
   fprintf(stderr, "xpad-install: cannot execute starter %s: %s\n", starter, strerror(errno));
   return 126;
-}
-
-static int activate_as_znxrun(int argc, char **argv) {
-  char *const probe[] = {"/system/bin/run-as", "znxrun", "/system/bin/true", NULL};
-  if (run_command(probe) != 0) return -1;
-  if (sh("dumpsys package com.tal.pad.znxxservice | "
-         "grep -q 'android.permission.ACCESS_CONTENT_PROVIDERS_EXTERNALLY: granted=true'") != 0) {
-    fprintf(stderr,
-            "xpad-install: uid 10072 cannot deliver Binder on this firmware; using uid 1000\n");
-    return -1;
-  }
-
-  const char *starter, *apk;
-  int rc = parse_service_args(argc, argv, &starter, &apk);
-  if (rc != 0) return rc;
-  char apk_arg[2048];
-  if (snprintf(apk_arg, sizeof(apk_arg), "--apk=%s", apk) >= (int)sizeof(apk_arg)) return 64;
-  fprintf(stderr, "xpad-install: activating BoomInstaller as uid 10072 (0044)\n");
-  char *const child[] = {
-      "/system/bin/run-as", "znxrun", (char *)starter, apk_arg, NULL
-  };
-  return run_command(child);
-}
-
-static int activate_as_system(int argc, char **argv) {
-  const char *starter, *apk;
-  int rc = parse_service_args(argc, argv, &starter, &apk);
-  if (rc != 0) return rc;
-  int acquire_rc = acquire_31317();
-  if (acquire_rc != 0) return acquire_rc == 75 ? 75 : 77;
-
-  char quoted_starter[4096], apk_arg[2048], quoted_apk[4096], command[8192];
-  if (snprintf(apk_arg, sizeof(apk_arg), "--apk=%s", apk) >= (int)sizeof(apk_arg)) {
-    return finish_31317_transaction("activate-arguments", 64);
-  }
-  shell_quote(quoted_starter, sizeof(quoted_starter), starter);
-  shell_quote(quoted_apk, sizeof(quoted_apk), apk_arg);
-  snprintf(command, sizeof(command), "%s %s", quoted_starter, quoted_apk);
-  fprintf(stderr, "xpad-install: activating BoomInstaller as uid 1000 (31317)\n");
-  rc = rpc(command, 60);
-  incident_event("activate-rpc", 0, rc == 0 ? "complete" : "failed");
-  if (incident_core_check("activate-core-check", 0) == 75) rc = 75;
-  return finish_31317_transaction("activate-complete", rc);
 }
 
 static int ionstack_root_java(int argc, char **argv) {
@@ -1477,6 +1429,7 @@ static void usage(FILE *out) {
       "xpad-install - single-file OEM APK installer for authorized XPad2 devices\n"
       "\n"
       "Usage:\n"
+      "  xpad-install --version\n"
       "  xpad-install self-test\n"
       "  xpad-install doctor\n"
       "  xpad-install install [--backend auto|provider|direct] APK\n"
@@ -1494,15 +1447,14 @@ static void usage(FILE *out) {
       "APK placement:\n"
       "  Put APKs under /sdcard/Download so the znxxservice Provider can read them.\n"
       "\n"
-      "Identity transports (selected automatically):\n"
-      "  1. 0044 run-as znxrun (uid 10072) for auto/provider APK operations\n"
-      "  2. IonStack temporary-root daemon at /data/local/tmp/temp_su.sock\n"
-      "  3. CVE-2024-31317 uid=1000/system_app runner\n"
+      "APK installation identity:\n"
+      "  0044 run-as znxrun (uid 10072) for every APK operation\n"
+      "  CVE-2024-31317 is used only to repair a missing/broken 0044 identity\n"
       "\n"
       "Backends:\n"
-      "  auto      Prefer the OEM znxxservice Provider; use the safe fallback when valid.\n"
+      "  auto      Prefer the OEM znxxservice Provider inside the 0044 identity.\n"
       "  provider  Ask the real znxxservice (UID 10072) to install the APK. Recommended.\n"
-      "  direct    Create a PackageInstaller session as UID 1000. Not valid as UID 0.\n"
+      "  direct    Create a PackageInstaller session inside the 0044 identity.\n"
       "\n"
       "Examples:\n"
       "  adb push app.apk /sdcard/Download/app.apk\n"
@@ -1676,6 +1628,77 @@ static int finalize_apk_persistence(const char *executable, int rc,
   return 0;
 }
 
+static int parse_apk_operation(int argc, char **argv, const char **backend) {
+  if (argc != 3 && argc != 5) {
+    fprintf(stderr,
+            "xpad-install: install/upgrade requires [--backend auto|provider|direct] APK\n");
+    return 64;
+  }
+  *backend = "auto";
+  if (argc == 5) {
+    if (strcmp(argv[2], "--backend")) {
+      fprintf(stderr, "xpad-install: unknown APK option: %s\n", argv[2]);
+      return 64;
+    }
+    *backend = argv[3];
+    if (strcmp(*backend, "auto") && strcmp(*backend, "provider") &&
+        strcmp(*backend, "direct")) {
+      fprintf(stderr, "xpad-install: invalid backend: %s\n", *backend);
+      return 64;
+    }
+  }
+  const char *apk = argv[argc - 1];
+  if (!apk || !*apk) {
+    fprintf(stderr, "xpad-install: APK path is empty\n");
+    return 64;
+  }
+  return 0;
+}
+
+static int install_via_managed_0044(int argc, char **argv) {
+  const char *backend = NULL;
+  int valid = parse_apk_operation(argc, argv, &backend);
+  if (valid != 0) return valid;
+
+  if (znxrun_status(0) != 0) {
+    if (getuid() != 2000) {
+      fprintf(stderr,
+              "xpad-install: managed 0044 is unavailable; repair must run from adb shell\n");
+      return 77;
+    }
+    fprintf(stderr,
+            "xpad-install: managed 0044 is unavailable; repairing it before installation\n");
+    int repair = ensure_znxrun(argv[0]);
+    if (repair != 0) {
+      fprintf(stderr,
+              "xpad-install: 0044 repair failed; target APK was not installed\n");
+      return repair;
+    }
+  }
+
+  fprintf(stderr,
+          "xpad-install: installing through managed 0044 (backend=%s)\n",
+          backend);
+  int rc = run_java_as_znxrun(argc - 1, argv + 1);
+  if (rc == 0) return finalize_apk_persistence(argv[0], rc, "0044");
+
+  /* A failed target APK must never be committed through 31317. If the failed
+   * operation also damaged the managed identity, repair it once and retry the
+   * same 0044 path. A healthy 0044 with an APK/backend error is returned as-is.
+   */
+  if (getuid() == 2000 && znxrun_status(0) != 0) {
+    fprintf(stderr,
+            "xpad-install: 0044 became unhealthy; repairing before one 0044 retry\n");
+    int repair = ensure_znxrun(argv[0]);
+    if (repair != 0) return repair;
+    rc = run_java_as_znxrun(argc - 1, argv + 1);
+    if (rc == 0) return finalize_apk_persistence(argv[0], rc, "0044-retry");
+  }
+  fprintf(stderr,
+          "xpad-install: 0044 installation failed; 31317 target-APK fallback is disabled\n");
+  return rc < 0 ? 77 : rc;
+}
+
 int main(int argc, char **argv) {
   if (argc >= 2 && (!strcmp(argv[1], "--help") || !strcmp(argv[1], "-h") ||
                     !strcmp(argv[1], "help"))) {
@@ -1685,6 +1708,11 @@ int main(int argc, char **argv) {
   if (argc == 1) {
     usage(stderr);
     return 64;
+  }
+  if (!strcmp(argv[1], "--version") || !strcmp(argv[1], "version")) {
+    if (argc != 2) { usage(stderr); return 64; }
+    printf("xpad-install %s\n", XPAD_INSTALL_VERSION);
+    return 0;
   }
   if (!strcmp(argv[1], "self-test")) {
     if (argc != 2) { usage(stderr); return 64; }
@@ -1736,50 +1764,31 @@ int main(int argc, char **argv) {
     if (valid != 0) return valid;
     int persistent = configure_autostart();
     if (persistent != 0) return persistent;
-    if (getuid() == 0) return serve(argc - 1, argv + 1);
-    int znxrun = activate_as_znxrun(argc - 1, argv + 1);
-    if (znxrun >= 0) return znxrun;
-    int root = ionstack_delegate(argc, argv);
-    if (root >= 0) return root;
-    return activate_as_system(argc - 1, argv + 1);
+    /*
+     * BoomInstaller's Shizuku control plane is a standard root/shell service.
+     * The managed 0044 identity belongs exclusively to APK installation, and
+     * the guarded 31317 runner may only repair that installer identity.
+     * Never turn either installer identity into a persistent service runtime.
+     */
+    return serve(argc - 1, argv + 1);
   }
-  if (argc >= 3 && (!strcmp(argv[1], "install") || !strcmp(argv[1], "upgrade"))) {
-    const char *backend = "auto";
-    if (argc >= 5 && !strcmp(argv[2], "--backend")) backend = argv[3];
-    if (strcmp(backend, "direct")) {
-      if (getuid() == 2000 && znxrun_status(0) != 0) {
-        fprintf(stderr, "xpad-install: repairing managed 0044 installer identity\n");
-        if (ensure_znxrun(argv[0]) != 0)
-          fprintf(stderr, "xpad-install: 0044 repair failed; trying safe fallback transport\n");
-      }
-      fprintf(stderr,
-              "xpad-install: trying managed 0044 installer identity first\n");
-      int znxrun = run_java_as_znxrun(argc - 1, argv + 1);
-      if (znxrun == 0) {
-        return finalize_apk_persistence(argv[0], 0, "0044");
-      }
-      if (znxrun > 0) {
-        fprintf(stderr, "xpad-install: 0044 APK path failed; using safe uid 1000 fallback\n");
-      }
-    }
+  if (!strcmp(argv[1], "install") || !strcmp(argv[1], "upgrade"))
+    return install_via_managed_0044(argc, argv);
+
+  /* The only remaining public command that may select a privileged transport
+   * is the explicit 0044 repair preflight. Reject typos and unknown commands
+   * before they can ever reach IonStack or the guarded 31317 runner.
+   */
+  if (strcmp(argv[1], "znxrun") || argc != 3 ||
+      strcmp(argv[2], "preflight")) {
+    fprintf(stderr, "xpad-install: unknown command: %s\n", argv[1]);
+    usage(stderr);
+    return 64;
   }
   if (getuid() == 0) {
     return ionstack_root_java(argc - 1, argv + 1);
   }
   int root = ionstack_delegate(argc, argv);
-  int apk_operation = argc >= 3 &&
-      (!strcmp(argv[1], "install") || !strcmp(argv[1], "upgrade"));
-  if (root >= 0) {
-    if (apk_operation)
-      fprintf(stderr,
-              "xpad-install: using already-available temporary-root transport\n");
-    return apk_operation ? finalize_apk_persistence(argv[0], root, "temporary-root") : root;
-  }
-  if (apk_operation)
-    fprintf(stderr,
-            "xpad-install: using final UID 1000/31317 fallback\n");
-  int system_rc = system_transport(argc, argv);
-  return apk_operation
-      ? finalize_apk_persistence(argv[0], system_rc, "31317")
-      : system_rc;
+  if (root >= 0) return root;
+  return system_transport(argc, argv);
 }

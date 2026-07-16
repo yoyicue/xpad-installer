@@ -46,7 +46,7 @@ adb -s SERIAL shell id
 uid=2000(shell) gid=2000(shell) ...
 ```
 
-不要先执行 `adb root`。量产版 Android 一般不支持它，xpad-install 也不依赖它；工具会按固件情况选择经过约束的 UID 10072、临时 root RPC 或 UID 1000 通道。
+不要先执行 `adb root`。量产版 Android 一般不支持它，xpad-install 也不依赖它。目标 APK 始终由受管的 UID 10072/0044 身份安装；只有缺失或损坏 0044 时，工具才短暂使用 UID 1000/31317 修复它。
 
 ## 3. 在电脑上安装 ADB
 
@@ -322,17 +322,17 @@ Android 仍会强制要求：
 
 | 后端 | 含义 | 适合谁 |
 |---|---|---|
-| `auto` | 先尝试 OEM/0044；失败后才降级，31317 始终是最后回退 | 小白首选 |
-| `provider` | 只请求真实 `znxxservice` Provider 安装 | 已确认 Provider 可用时 |
-| `direct` | 以 UID 1000 创建 PackageInstaller session，并通过 FileBridge 写入 APK | Provider 不可用的诊断/回退 |
+| `auto` | 在 0044 身份中优先请求 OEM Provider，未提交时再用同一身份的 PackageInstaller | 小白首选 |
+| `provider` | 在 0044 身份中只请求真实 `znxxservice` Provider 安装 | 已确认 Provider 可用时 |
+| `direct` | 在 0044 身份中创建 PackageInstaller session，并通过 FileBridge 写入 APK | Provider 不可用时诊断 |
 
 建议始终先用 `auto`。
 
-如果最终由 31317 完成 APK 提交，工具会在退出前立即检查 0044；PackageManager 重写导致
-alias 丢失时，会补回正式 anchor 并再次验证 UID 10072。补回失败时命令返回失败，不会把
-“APK 已安装但备用身份损坏”误报为完整成功。
+如果安装前没有健康的 0044，31317 只负责补回正式 anchor 和 alias。外层再次验证 UID
+10072 后才会把目标 APK 交给 0044；补回失败则直接返回失败，目标 APK 不会经 31317 提交。
+安装过程中若 0044 意外变坏，工具只修复一次并重新走一次 0044。
 
-`direct` 不是“root 强装”。源码明确阻止 UID 0 直接调用该后端；它需要正确的 UID 1000 身份和 OEM installer attribution。
+`direct` 不是“root 强装”，它仍需要健康的 0044/UID 10072 身份和 OEM installer attribution。
 
 ### 9.6 `verify PACKAGE [VERSION_CODE]`
 
@@ -400,8 +400,11 @@ STARTER=${APK%/base.apk}/lib/arm64/libshizuku.so
 1. 给 BoomInstaller 配置所需权限与无线 ADB 设置；
 2. 通过 Android 标准 TLS pairing 配对 BoomInstaller 自己的本地 ADB key；
 3. 等待 OEM pairing 服务完成收尾并刷新无线 ADB；
-4. 选择 UID 10072、临时 root 或 UID 1000；
-5. 启动 BoomInstaller 服务。
+4. 直接使用当前 root 或标准 ADB shell 身份启动 BoomInstaller 服务。
+
+`activate` 不会探测或进入 0044/31317。BoomInstaller 的 Shizuku 服务属于控制面，
+保持标准 root/shell 模型；0044 属于 APK 安装数据面，受保护的 31317 只负责修复 0044。这样普通开机
+自启动不会因为启动 BoomInstaller 而触发 31317。
 
 它会改变设备的无线 ADB 全局设置。只对已经安装并信任的 BoomInstaller 使用。
 
@@ -510,26 +513,27 @@ adb -s SERIAL shell \
 
 ### 9.14 内部命令：`serve` 和 `--root-child`
 
-源码还包含 `serve` 和 `--root-child`，它们是 `activate` 及临时 root RPC 内部调用的入口：
+源码还包含 `serve` 和 `--root-child`，它们是内部调用入口：
 
-- `serve` 只允许 UID 0、1000 或 10072；
+- `serve` 只允许 UID 0 或标准 ADB shell UID 2000；
 - `--root-child` 用于受约束的临时 root transport。
 
 它们不是普通用户命令，不要手工调用。
 
 ## 10. 身份通道是什么意思
 
-xpad-install 会按环境自动选择：
+xpad-install 将“安装身份”和“修复手段”严格分开：
 
 | 通道 | 身份 | 用途 |
 |---|---:|---|
-| `0044 run-as znxrun` | UID 10072 | 优先使用 OEM 安装身份 |
-| `temp_su.sock` | 临时 UID 0 RPC，再降为 UID 1000 | 已有临时引导窗口时使用 |
-| `31317 system runner` | UID 1000 / `system_app` | 当前固件的安全回退 |
+| `0044 run-as znxrun` | UID 10072 | 唯一的目标 APK 安装身份 |
+| `temp_su.sock` | 临时 UID 0 RPC | 仅供明确的内部/维护命令，不安装目标 APK |
+| `31317 system runner` | UID 1000 / `system_app` | 仅在 0044 缺失或失效时补建/修复 0044 |
 
-这些通道不是给用户提供通用 shell。工具只执行固定安装、验证、清理与 BoomInstaller 启动操作。
+这些安装通道不是给用户提供通用 shell，只执行固定安装、验证与清理操作。
+BoomInstaller 启动不使用这里的 0044/31317 身份选择。
 
-31317 正常流程会：
+31317 修复流程会：
 
 - 对齐 64/32 位 Zygote；
 - 使用两个牺牲 activity；
@@ -549,7 +553,7 @@ xpad-install 会按环境自动选择：
 |---|---|
 | `[*]` | 正在执行或状态信息 |
 | `[+]` | 步骤成功 |
-| `[!]` | 警告，可能已自动回退 |
+| `[!]` | 警告，可能触发了有界的 0044 修复 |
 | `[-]` | 操作失败 |
 
 macOS/Linux 查看上一条命令退出码：
@@ -636,9 +640,10 @@ adb -s SERIAL shell ls -lh /sdcard/Download/your-app.apk
 
 新 APK 的 versionCode 更低。使用更高版本，或重新构建正确 versionCode；工具不会默认绕过降级保护。
 
-### `uid 10072 cannot deliver Binder ... using uid 1000`
+### `managed 0044 is unavailable; repairing it before installation`
 
-这是已知固件上的正常回退提示，不等于失败。继续看最终是否出现 `INSTALL SUCCESS` 或服务 PID。
+工具尚未开始安装目标 APK，正在用有界的 31317 事务补回 0044。只有随后出现健康的
+`ZNXRUN_STATUS`，目标 APK 才会经 0044 提交；修复失败时不要连续重试，按退出码决定是否普通重启。
 
 ### `zygote alignment primary=0 secondary=0`
 
