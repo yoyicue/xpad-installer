@@ -5,12 +5,12 @@
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-VERSION=2.5.1
+VERSION=2.6.0
 SOURCE="$ROOT/windows-toolkit"
 DIST="$ROOT/dist"
 NAME="xpad-safe-install-toolkit-v$VERSION"
 ZIP="$DIST/$NAME.zip"
-EXPECTED_TOOL_SHA=cd21bb7b4df089361e45b72096e11aa639ec57675e6012097341dfc14ee9f388
+EXPECTED_TOOL_SHA=288a91b83ff1b77fa19fde00c6ddb2feb38693e82bb4652ee00a54c4b55fa67e
 
 sha256_file() {
   if command -v sha256sum >/dev/null 2>&1; then
@@ -62,5 +62,6 @@ find "$STAGE" -exec touch -t 200001010000 {} +
     "$NAME/SHA256SUMS"
 )
 unzip -tq "$ZIP" >/dev/null
+python3 "$ROOT/tools/release_version_gate.py" "$ZIP"
 printf 'XPAD_WINDOWS_TOOLKIT_OK version=%s sha256=%s output=%s\n' \
   "$VERSION" "$(sha256_file "$ZIP")" "$ZIP"

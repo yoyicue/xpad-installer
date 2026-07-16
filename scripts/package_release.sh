@@ -44,4 +44,5 @@ rm -f "$OUTPUT"
     "$NAME/SHA256SUMS"
 )
 
+python3 "$ROOT/tools/release_version_gate.py" "$OUTPUT"
 echo "Built release archive: $OUTPUT"

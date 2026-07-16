@@ -1,7 +1,7 @@
 # Copyright (C) 2026 yoyicue
 # SPDX-License-Identifier: GPL-3.0-only
 
-.PHONY: build carrier verify-carrier test verify package windows-recovery-package windows-toolkit-package clean
+.PHONY: build carrier verify-carrier test version-gate verify package windows-recovery-package windows-toolkit-package clean
 
 PYTHON ?= python3
 
@@ -17,7 +17,10 @@ verify-carrier:
 test:
 	$(PYTHON) -m unittest discover -s tests -v
 
-verify: test build
+version-gate:
+	$(PYTHON) tools/release_version_gate.py
+
+verify: test build version-gate
 
 package: test
 	./scripts/package_release.sh

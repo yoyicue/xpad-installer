@@ -771,6 +771,12 @@ static int wait_znxrun_healthy(int attempts, useconds_t interval_us) {
       dprintf(STDOUT_FILENO, "ZNXRUN_SETTLE result=healthy attempt=%d\n", attempt);
       return 0;
     }
+    unsigned long long elapsed_us =
+        (unsigned long long)(attempt - 1) * (unsigned long long)interval_us;
+    if (attempt == 1 || elapsed_us % 5000000ULL == 0)
+      dprintf(STDOUT_FILENO,
+              "ZNXRUN_SETTLE result=pending attempt=%d elapsed_seconds=%llu\n",
+              attempt, elapsed_us / 1000000ULL);
     if (attempt < attempts) usleep(interval_us);
   }
   dprintf(STDOUT_FILENO, "ZNXRUN_SETTLE result=timeout attempts=%d\n", attempts);
@@ -1620,7 +1626,7 @@ cleanup:
       (!strcmp(argv[2], "create") || !strcmp(argv[2], "ensure"));
   for (int i = 3; verify_znxrun && i < argc; i++)
     if (!strcmp(argv[i], "--apply")) {
-      if (rc == 0 && wait_znxrun_healthy(26, 200000) != 0) {
+      if (rc == 0 && wait_znxrun_healthy(61, 1000000) != 0) {
         fprintf(stderr,
                 "xpad-install: 0044 commit returned success but bounded health verification timed out\n");
         return 1;

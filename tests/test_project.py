@@ -26,6 +26,7 @@ class StandaloneProjectTests(unittest.TestCase):
             "scripts/package_release.sh",
             "scripts/package_windows_recovery.sh",
             "tools/package_windows_toolkit.sh",
+            "tools/release_version_gate.py",
             "windows/xpad2-lockscreen-recovery.bat",
             "windows-toolkit/xpad-safe-install-gui.bat",
             "windows-toolkit/xpad-safe-install-gui.py",
@@ -58,6 +59,7 @@ class StandaloneProjectTests(unittest.TestCase):
             "scripts/package_release.sh",
             "scripts/package_windows_recovery.sh",
             "tools/package_windows_toolkit.sh",
+            "tools/release_version_gate.py",
             "docs/USAGE.zh-CN.md",
             "windows/xpad2-lockscreen-recovery.bat",
             "windows/README-LOCKSCREEN-RECOVERY.zh-CN.txt",
@@ -71,6 +73,28 @@ class StandaloneProjectTests(unittest.TestCase):
         )
         for relative in required:
             self.assertTrue((ROOT / relative).is_file(), relative)
+
+    def test_every_release_packager_runs_the_version_gate(self):
+        gate = "tools/release_version_gate.py"
+        self.assertIn("version-gate", (ROOT / "Makefile").read_text())
+        for relative in (
+            "scripts/package_release.sh",
+            "scripts/package_windows_recovery.sh",
+            "tools/package_windows_toolkit.sh",
+        ):
+            self.assertIn(gate, (ROOT / relative).read_text(), relative)
+
+    def test_recovery_release_version_is_explicitly_pinned(self):
+        script = (ROOT / "scripts/package_windows_recovery.sh").read_text()
+        self.assertIn("RECOVERY_VERSION=0.2.2", script)
+        self.assertIn(
+            'NAME="xpad-installer-v$RECOVERY_VERSION-windows-lockscreen-recovery"',
+            script,
+        )
+        self.assertNotIn(
+            'NAME="xpad-installer-v$VERSION-windows-lockscreen-recovery"',
+            script,
+        )
 
     def test_beginner_guide_covers_public_cli_and_official_adb_docs(self):
         guide = (ROOT / "docs/USAGE.zh-CN.md").read_text()
@@ -197,7 +221,8 @@ class StandaloneProjectTests(unittest.TestCase):
             "installerPackageName=",
             "run_znxrun_mutation",
             "forward_guarded_signal",
-            "wait_znxrun_healthy(26, 200000)",
+            "wait_znxrun_healthy(61, 1000000)",
+            "ZNXRUN_SETTLE result=pending",
             "ZNXRUN_SETTLE",
         ):
             self.assertIn(value, native)

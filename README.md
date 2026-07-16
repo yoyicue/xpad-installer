@@ -40,10 +40,10 @@ package named `com.yoyicue.xpad2.installeranchor`, embedded in the ELF and not
 used for normal application updates. If 0044 is missing or broken, the bounded
 UID 1000/31317 runner is used only to repair 0044. The target APK is not handed
 to 31317: repair must pass the outer 0044 health check before installation starts.
-The v0.2.5 anchor advances to versionCode 2 so a repair of already-persisted
+The v0.2.6 anchor uses versionCode 2 so a repair of already-persisted
 attribution is a material PackageManager update, then polls full alias/UID/source
-health for at most five seconds instead of treating the first `run-as` miss as
-final. The version advance uses a full update; same-version repairs retain the
+health for at most 60 seconds instead of treating an asynchronous `run-as` miss as
+final. Progress is logged every five seconds. The version advance uses a full update; same-version repairs retain the
 bounded inherit-existing transaction.
 The 31317 repair implementation keeps the existing three-attempt policy, durably
 saves and exactly restores the original hidden setting, records every phase and core PID under
@@ -107,7 +107,7 @@ recovery-key fingerprint. Private key material is never copied into the repo.
 make package
 ```
 
-This produces `dist/xpad-installer-v0.2.5-android-arm64.zip`. The archive
+This produces `dist/xpad-installer-v0.2.6-android-arm64.zip`. The archive
 contains the executable, this README, the Chinese beginner guide, the GPLv3
 license, and a SHA-256 manifest for the executable.
 
@@ -138,13 +138,13 @@ It never clears or creates a PIN, pattern, or password and never writes the raw
 ## Windows safe-install GUI
 
 The separate beginner-facing Windows toolkit installs a selected APK through
-the same locked `xpad-install` v0.2.5 engine:
+the same locked `xpad-install` v0.2.6 engine:
 
 ```shell
 make windows-toolkit-package
 ```
 
-This produces `dist/xpad-safe-install-toolkit-v2.5.1.zip`. The archive includes
+This produces `dist/xpad-safe-install-toolkit-v2.6.0.zip`. The archive includes
 `xpad-safe-install-gui.bat`, the Python GUI, the locked device-side executable,
 the Chinese guide, license, and checksums. It does not bundle `adb.exe`; Android
 Platform-Tools may be placed beside the batch file, in a `platform-tools`

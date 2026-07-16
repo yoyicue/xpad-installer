@@ -7,8 +7,8 @@ set -eu
 umask 022
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-VERSION=$(tr -d '\r\n' < "$ROOT/VERSION")
-NAME="xpad-installer-v$VERSION-windows-lockscreen-recovery"
+RECOVERY_VERSION=0.2.2
+NAME="xpad-installer-v$RECOVERY_VERSION-windows-lockscreen-recovery"
 OUTPUT=${1:-"$ROOT/dist/$NAME.zip"}
 EXPECTED_SHA256=9f1ff6b7635548a11c57b2b8a31b0b98b941773bc6e0f2f00a5c3dc98e3a5fc0
 
@@ -63,4 +63,5 @@ rm -f "$OUTPUT"
     "$NAME/SHA256SUMS"
 )
 
+python3 "$ROOT/tools/release_version_gate.py" "$OUTPUT"
 echo "Built Windows recovery archive: $OUTPUT"
