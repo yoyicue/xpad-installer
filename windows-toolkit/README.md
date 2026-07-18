@@ -1,4 +1,4 @@
-# xpad 安全安装工具 v2.9.0
+# xpad 安全安装工具 v2.10.0
 
 面向 Windows 小白用户的 GUI 安装器，仅用于本人拥有或已获得授权的 XPad2 设备。
 
@@ -9,7 +9,7 @@
 3. 双击 `xpad-safe-install-gui.bat`。
 4. 选择设备 SN 和 APK，点击“安装”。
 
-工具包不内置 `adb.exe`。设备端安装引擎固定为 `xpad-install` v0.2.9，并在运行前校验
+工具包不内置 `adb.exe`。设备端安装引擎固定为 `xpad-install` v0.2.10，并在运行前校验
 SHA-256。程序会保存完整时间戳日志，但不在固定的 `doctor` 后空等 10 秒，也不会在
 `auto` 已经回退 direct 后再次重复安装。
 

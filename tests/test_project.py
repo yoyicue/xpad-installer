@@ -173,8 +173,11 @@ class StandaloneProjectTests(unittest.TestCase):
             "stableSamples >= 3",
             "wireless ADB authorization did not become stable",
             'callBoomProvider("getAutoStartStatus"',
+            'new ProcessBuilder(',
+            '"/system/bin/settings", "list", "global"',
         ):
             self.assertIn(value, java)
+        self.assertNotIn("Settings.Global.getInt", java)
         self.assertIn('puts("autostart=paired")', native)
         self.assertIn('puts("autostart_reboot=pending")', native)
         self.assertNotIn("sleep(15)", native)

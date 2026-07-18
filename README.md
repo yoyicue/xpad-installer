@@ -74,6 +74,8 @@ On first provisioning it waits up to 90 seconds for the user to approve
 "Always allow on this network" and for one valid TLS port to remain stable.
 Timeouts return nonzero; success is reported as `paired` plus `pending` ordinary
 reboot, never merely because the three Settings writes returned successfully.
+The wait probe executes Android's canonical shell `settings` command so its
+calling-package attribution remains valid under UID 2000.
 `autostart status` is read-only and exposes the Provider, stored-key, pairing,
 launch-mode, and server-UID state used for remote diagnosis.
 
@@ -114,7 +116,7 @@ recovery-key fingerprint. Private key material is never copied into the repo.
 make package
 ```
 
-This produces `dist/xpad-installer-v0.2.9-android-arm64.zip`. The archive
+This produces `dist/xpad-installer-v0.2.10-android-arm64.zip`. The archive
 contains the executable, this README, the Chinese beginner guide, the GPLv3
 license, and a SHA-256 manifest for the executable.
 
@@ -145,13 +147,13 @@ It never clears or creates a PIN, pattern, or password and never writes the raw
 ## Windows safe-install GUI
 
 The separate beginner-facing Windows toolkit installs a selected APK through
-the same locked `xpad-install` v0.2.9 engine:
+the same locked `xpad-install` v0.2.10 engine:
 
 ```shell
 make windows-toolkit-package
 ```
 
-This produces `dist/xpad-safe-install-toolkit-v2.9.0.zip`. The archive includes
+This produces `dist/xpad-safe-install-toolkit-v2.10.0.zip`. The archive includes
 `xpad-safe-install-gui.bat`, the Python GUI, the locked device-side executable,
 the Chinese guide, license, and checksums. It does not bundle `adb.exe`; Android
 Platform-Tools may be placed beside the batch file, in a `platform-tools`
