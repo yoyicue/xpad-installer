@@ -157,7 +157,7 @@ adb -s SERIAL shell getprop ro.product.model
 macOS/Linux 校验：
 
 ```shell
-cd xpad-installer-v0.2.8-android-arm64
+cd xpad-installer-v0.2.9-android-arm64
 shasum -a 256 -c SHA256SUMS
 ```
 
@@ -398,8 +398,8 @@ STARTER=${APK%/base.apk}/lib/arm64/libshizuku.so
 `activate` 会依次：
 
 1. 给 BoomInstaller 配置所需权限与无线 ADB 设置；
-2. 通过 Android 标准 TLS pairing 配对 BoomInstaller 自己的本地 ADB key；
-3. 等待 OEM pairing 服务完成收尾并刷新无线 ADB；
+2. 首次使用时等待你在 Pad 上确认“始终允许使用此网络”，并确认 TLS 端口连续稳定；
+3. 通过 Android 标准 TLS pairing 配对 BoomInstaller 自己的本地 ADB key；
 4. 直接使用当前 root 或标准 ADB shell 身份启动 BoomInstaller 服务。
 
 `activate` 不会探测或进入 0044/31317。BoomInstaller 的 Shizuku 服务属于控制面，
@@ -419,7 +419,22 @@ adb -s SERIAL shell \
 
 适合当前服务已经启动，只想重新配置持久化时使用。首次部署通常直接执行 `activate` 即可。
 
-### 9.10 `znxrun status`
+首次配置最长等待 90 秒。出现无线调试授权弹窗时，必须勾选“始终允许使用此网络”后确认；
+未确认、系统把 `adb_wifi_enabled` 回滚为 0、或 TLS 端口未稳定时命令会以非零退出，
+不会输出假成功。配对成功会输出 `autostart=paired` 和
+`autostart_reboot=pending`，表示需要一次普通重启验收自动启动。
+
+### 9.10 `autostart status`
+
+```shell
+adb -s SERIAL shell \
+  /data/local/tmp/xpad-install autostart status
+```
+
+只读输出 Boom Provider 是否可调用、配对密钥是否存在且可解密、配对状态、最近一次
+启动状态、运行模式与服务 UID。它不会打开无线调试、重新配对或进入 0044/31317。
+
+### 9.11 `znxrun status`
 
 ```shell
 adb -s SERIAL shell \
@@ -441,7 +456,7 @@ adb -s SERIAL shell \
 ZNXRUN_STATUS status=healthy alias=healthy uid=10070 expected_uid=10070 anchor=anchored package=com.yoyicue.xpad2.installeranchor
 ```
 
-### 9.11 `znxrun ensure`
+### 9.12 `znxrun ensure`
 
 ```shell
 adb -s SERIAL shell \
@@ -468,7 +483,7 @@ inherit-existing。提交后最多按秒轮询 60 秒，同时验证 alias、实
 
 `install --backend auto` 和 `upgrade --backend auto` 也会在需要时自动执行同样的修复。
 
-### 9.12 `znxrun preflight`
+### 9.13 `znxrun preflight`
 
 ```shell
 adb -s SERIAL shell \
@@ -479,7 +494,7 @@ adb -s SERIAL shell \
 
 虽然它不做持久化 alias 写入，但为了从 UID 1000 读取必要信息，仍可能短暂使用 31317。
 
-### 9.13 `znxrun create --package PACKAGE --apk UPDATE.apk [--apply]`
+### 9.14 `znxrun create --package PACKAGE --apk UPDATE.apk [--apply]`
 
 这是保留给开发者验证非托管 carrier 的底层命令。日常恢复只使用 `znxrun ensure`。
 
@@ -517,7 +532,7 @@ adb -s SERIAL shell \
 
 这是初始化/恢复设备专属 OEM installer alias 的高级命令。小白不要执行 `--apply`，除非维护文档明确要求，并且已经备份现场状态。
 
-### 9.14 内部命令：`serve` 和 `--root-child`
+### 9.15 内部命令：`serve` 和 `--root-child`
 
 源码还包含 `serve` 和 `--root-child`，它们是内部调用入口：
 

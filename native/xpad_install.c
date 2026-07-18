@@ -1188,22 +1188,14 @@ static int configure_autostart(void) {
     fprintf(stderr, "xpad-install: BoomInstaller auto-start setup failed\n");
     return rc;
   }
-  /* AdbDebuggingManager tears the pairing server down asynchronously. */
-  sleep(15);
-  char *const wifi_disabled[] = {
-    "/system/bin/settings", "put", "global", "adb_wifi_enabled", "0", NULL
-  };
-  if (run_command(wifi_disabled) != 0) {
-    fprintf(stderr, "xpad-install: cannot restart wireless ADB after pairing\n");
-    return 77;
-  }
-  sleep(2);
-  if (run_command(wifi_enabled) != 0) {
-    fprintf(stderr, "xpad-install: cannot restart wireless ADB after pairing\n");
-    return 77;
-  }
-  puts("autostart=enabled");
+  puts("autostart=paired");
+  puts("autostart_reboot=pending");
   return 0;
+}
+
+static int autostart_status(void) {
+  char *args[] = {"autostart", "status"};
+  return run_embedded_java(2, args);
 }
 
 static int run_java_as_znxrun(int argc, char **argv) {
@@ -1538,6 +1530,7 @@ static void usage(FILE *out) {
       "  xpad-install verify PACKAGE [VERSION_CODE]\n"
       "  xpad-install activate --starter=PATH --apk=MANAGER.apk\n"
       "  xpad-install autostart enable\n"
+      "  xpad-install autostart status\n"
       "  xpad-install znxrun status\n"
       "  xpad-install znxrun ensure\n"
       "  xpad-install znxrun preflight\n"
@@ -1563,6 +1556,7 @@ static void usage(FILE *out) {
       "  adb shell /data/local/tmp/xpad-install install /sdcard/Download/app.apk\n"
       "  adb shell /data/local/tmp/xpad-install verify com.example.app\n"
       "  adb shell /data/local/tmp/xpad-install autostart enable\n"
+      "  adb shell /data/local/tmp/xpad-install autostart status\n"
       "  adb shell /data/local/tmp/xpad-install znxrun status\n"
       "  adb shell /data/local/tmp/xpad-install znxrun ensure\n"
       "  adb shell /data/local/tmp/xpad-install znxrun preflight\n"
@@ -1871,6 +1865,9 @@ int main(int argc, char **argv) {
   }
   if (!strcmp(argv[1], "serve")) return serve(argc - 1, argv + 1);
   if (!strcmp(argv[1], "autostart")) {
+    if (argc == 3 && !strcmp(argv[2], "status")) {
+      return autostart_status();
+    }
     if (argc != 3 || strcmp(argv[2], "enable")) {
       usage(stderr);
       return 64;

@@ -107,6 +107,7 @@ class StandaloneProjectTests(unittest.TestCase):
             "xpad-install verify",
             "xpad-install activate",
             "xpad-install autostart enable",
+            "xpad-install autostart status",
             "xpad-install znxrun status",
             "xpad-install znxrun ensure",
             "xpad-install znxrun preflight",
@@ -161,6 +162,23 @@ class StandaloneProjectTests(unittest.TestCase):
             "znxrun ensure",
         ):
             self.assertIn(f'"  xpad-install {command}', source)
+
+    def test_autostart_waits_for_real_wireless_adb_readiness(self):
+        native = (ROOT / "native/xpad_install.c").read_text()
+        java = (ROOT / "exploit/XpadInstaller.java").read_text()
+        for value in (
+            "getAdbWirelessPort",
+            "waiting-network-trust",
+            "confirm-always-allow-this-network",
+            "stableSamples >= 3",
+            "wireless ADB authorization did not become stable",
+            'callBoomProvider("getAutoStartStatus"',
+        ):
+            self.assertIn(value, java)
+        self.assertIn('puts("autostart=paired")', native)
+        self.assertIn('puts("autostart_reboot=pending")', native)
+        self.assertNotIn("sleep(15)", native)
+        self.assertNotIn('"adb_wifi_enabled", "0"', native)
 
     def test_read_only_commands_return_before_any_31317_fallback(self):
         source = (ROOT / "native/xpad_install.c").read_text()
