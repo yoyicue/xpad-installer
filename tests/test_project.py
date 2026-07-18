@@ -147,6 +147,16 @@ class StandaloneProjectTests(unittest.TestCase):
         for value in expected:
             self.assertIn(value, source)
 
+    def test_oem_installer_apk_path_is_resolved_by_package(self):
+        native = (ROOT / "native/xpad_install.c").read_text()
+        java = (ROOT / "exploit/XpadInstaller.java").read_text()
+        self.assertIn("lookup_oem_installer_apk", native)
+        self.assertIn('"/system/bin/pm", "path", OEM_INSTALLER', native)
+        self.assertIn("provider_path=", native)
+        self.assertIn("znxx.applicationInfo.sourceDir", java)
+        self.assertNotIn("/system/app/pad2_znxxservice", native)
+        self.assertNotIn("/system/app/pad2_znxxservice", java)
+
     def test_cli_surface_is_preserved(self):
         source = (ROOT / "native/xpad_install.c").read_text()
         for command in (

@@ -116,7 +116,7 @@ recovery-key fingerprint. Private key material is never copied into the repo.
 make package
 ```
 
-This produces `dist/xpad-installer-v0.2.10-android-arm64.zip`. The archive
+This produces `dist/xpad-installer-v0.2.11-android-arm64.zip`. The archive
 contains the executable, this README, the Chinese beginner guide, the GPLv3
 license, and a SHA-256 manifest for the executable.
 
@@ -147,7 +147,7 @@ It never clears or creates a PIN, pattern, or password and never writes the raw
 ## Windows safe-install GUI
 
 The separate beginner-facing Windows toolkit installs a selected APK through
-the same locked `xpad-install` v0.2.10 engine:
+the same locked `xpad-install` v0.2.11 engine:
 
 ```shell
 make windows-toolkit-package

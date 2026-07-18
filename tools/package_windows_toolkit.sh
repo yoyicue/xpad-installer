@@ -10,7 +10,7 @@ SOURCE="$ROOT/windows-toolkit"
 DIST="$ROOT/dist"
 NAME="xpad-safe-install-toolkit-v$VERSION"
 ZIP="$DIST/$NAME.zip"
-EXPECTED_TOOL_SHA=dfe061e8105199b69771e2f9dc05d92ad85538910181dc006070dadfb0a0c15e
+EXPECTED_TOOL_SHA=125e55fb06e4eaf5f7dc8cf4f14a2c2830dae3ee8d3047ce30a7e47403009910
 
 sha256_file() {
   if command -v sha256sum >/dev/null 2>&1; then

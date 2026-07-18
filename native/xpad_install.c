@@ -701,6 +701,43 @@ static int parse_package_uid(const char *output, const char *package_name,
   return -1;
 }
 
+static int parse_package_path(const char *output, char *path, size_t capacity) {
+  static const char prefix[] = "package:";
+  if (!output || !path || capacity < 2) return -1;
+  const char *line = output;
+  while (*line) {
+    const char *end = strpbrk(line, "\r\n");
+    size_t length = end ? (size_t)(end - line) : strlen(line);
+    if (length > sizeof(prefix) - 1 &&
+        !memcmp(line, prefix, sizeof(prefix) - 1)) {
+      const char *value = line + sizeof(prefix) - 1;
+      size_t value_length = length - (sizeof(prefix) - 1);
+      if (value[0] == '/' && value_length + 1 <= capacity &&
+          !memchr(value, ' ', value_length) &&
+          !memchr(value, '\t', value_length)) {
+        memcpy(path, value, value_length);
+        path[value_length] = 0;
+        return 0;
+      }
+    }
+    if (!end) break;
+    line = end + 1;
+    if (end[0] == '\r' && line[0] == '\n') line++;
+  }
+  return -1;
+}
+
+static int lookup_oem_installer_apk(char *path, size_t capacity) {
+  char *output = NULL;
+  char *const argv[] = {
+    "/system/bin/pm", "path", OEM_INSTALLER, NULL
+  };
+  int rc = capture_command(argv, &output);
+  int parsed = rc == 0 ? parse_package_path(output, path, capacity) : -1;
+  free(output);
+  return parsed == 0 && access(path, R_OK) == 0 ? 0 : -1;
+}
+
 static int lookup_oem_installer_uid(uid_t *uid) {
   char *output = NULL;
   char *const argv[] = {
@@ -1130,8 +1167,13 @@ static int transfer_apk_to_system(const char *local_path) {
 }
 
 static int exec_java(const char *dex_path, int argc, char **argv) {
-  char cp[512], dexenv[512];
-  snprintf(cp, sizeof(cp), "CLASSPATH=%s:/system/app/pad2_znxxservice/pad2_znxxservice.apk", dex_path);
+  char oem_apk[PATH_MAX], cp[PATH_MAX * 2], dexenv[512];
+  if (lookup_oem_installer_apk(oem_apk, sizeof(oem_apk)) != 0) {
+    fprintf(stderr, "xpad-install: cannot resolve readable OEM installer APK for %s\n",
+            OEM_INSTALLER);
+    return 66;
+  }
+  snprintf(cp, sizeof(cp), "CLASSPATH=%s:%s", dex_path, oem_apk);
   snprintf(dexenv, sizeof(dexenv), "XPAD_EMBEDDED_DEX=%s", dex_path);
   setenv("CLASSPATH", cp + strlen("CLASSPATH="), 1);
   setenv("XPAD_EMBEDDED_DEX", dexenv + strlen("XPAD_EMBEDDED_DEX="), 1);
@@ -1199,6 +1241,12 @@ static int autostart_status(void) {
 }
 
 static int run_java_as_znxrun(int argc, char **argv) {
+  char oem_apk[PATH_MAX];
+  if (lookup_oem_installer_apk(oem_apk, sizeof(oem_apk)) != 0) {
+    fprintf(stderr, "xpad-install: cannot resolve readable OEM installer APK for %s\n",
+            OEM_INSTALLER);
+    return 66;
+  }
   char *const probe[] = {"/system/bin/run-as", "znxrun", "/system/bin/true", NULL};
   if (run_command(probe) != 0) return -1;
   int apk_index = argc >= 2 &&
@@ -1221,11 +1269,13 @@ static int run_java_as_znxrun(int argc, char **argv) {
     return 74;
   }
 
-  char command[16384];
+  char command[16384], classpath[PATH_MAX * 2], quoted_classpath[PATH_MAX * 2 + 16];
+  snprintf(classpath, sizeof(classpath), "%s:%s", ROOT_DEX, oem_apk);
+  shell_quote(quoted_classpath, sizeof(quoted_classpath), classpath);
   int used = snprintf(command, sizeof(command),
-      "CLASSPATH=" ROOT_DEX ":/system/app/pad2_znxxservice/pad2_znxxservice.apk "
+      "CLASSPATH=%s "
       "XPAD_EMBEDDED_DEX=" ROOT_DEX " XPAD_TRANSPORT=0044 "
-      "/system/bin/app_process / XpadInstaller");
+      "/system/bin/app_process / XpadInstaller", quoted_classpath);
   if (used < 0 || (size_t)used >= sizeof(command)) {
     unlink(ROOT_DEX);
     unlink(ZNXRUN_APK);
@@ -1390,6 +1440,14 @@ static int native_self_test(void) {
   int valid = dex_size >= 8 && !memcmp(xpad_dex_start, "dex\n", 4) &&
       anchor_size >= 4 && !memcmp(xpad_anchor_start, "PK\003\004", 4) &&
       uid_parser_valid;
+  char parsed_path[PATH_MAX];
+  int path_parser_valid =
+      parse_package_path("package:/system/app/pad_znxxservice/pad_znxxservice.apk\n",
+                         parsed_path, sizeof(parsed_path)) == 0 &&
+      !strcmp(parsed_path, "/system/app/pad_znxxservice/pad_znxxservice.apk") &&
+      parse_package_path("package:relative/path.apk\n", parsed_path,
+                         sizeof(parsed_path)) != 0;
+  valid = valid && path_parser_valid;
   printf("XPAD_INSTALL_SELF_TEST status=%s version=%s dex_size=%zu anchor_size=%zu\n",
          valid ? "ok" : "failed", XPAD_INSTALL_VERSION, dex_size, anchor_size);
   return valid ? 0 : 1;
@@ -1410,9 +1468,11 @@ static int native_doctor(void) {
   printf("uid=%d\n", getuid());
   puts("transport=none");
   printf("selinux=%s\n", context);
-  printf("provider=%s\n",
-         access("/system/app/pad2_znxxservice/pad2_znxxservice.apk", R_OK) == 0
-             ? "available" : "missing");
+  char provider_path[PATH_MAX];
+  int provider_available =
+      lookup_oem_installer_apk(provider_path, sizeof(provider_path)) == 0;
+  printf("provider=%s\n", provider_available ? "available" : "missing");
+  if (provider_available) printf("provider_path=%s\n", provider_path);
   znxrun_status(1);
   puts("31317=not-probed");
   return self_test;
@@ -1566,6 +1626,12 @@ static void usage(FILE *out) {
 }
 
 static int system_transport(int argc, char **argv) {
+  char oem_apk[PATH_MAX];
+  if (lookup_oem_installer_apk(oem_apk, sizeof(oem_apk)) != 0) {
+    fprintf(stderr, "xpad-install: cannot resolve readable OEM installer APK for %s\n",
+            OEM_INSTALLER);
+    return 66;
+  }
   int acquire_rc = acquire_31317();
   if (acquire_rc != 0) return acquire_rc == 75 ? 75 : 77;
   int rc = 74;
@@ -1593,11 +1659,13 @@ static int system_transport(int argc, char **argv) {
       goto cleanup;
     }
   }
-  char command[16384], quoted[2048];
+  char command[16384], quoted[2048], classpath[PATH_MAX * 2];
+  snprintf(classpath, sizeof(classpath), "%s:%s", SYSTEM_DEX, oem_apk);
+  shell_quote(quoted, sizeof(quoted), classpath);
   snprintf(command, sizeof(command),
-           "CLASSPATH=%s:/system/app/pad2_znxxservice/pad2_znxxservice.apk "
+           "CLASSPATH=%s "
            "XPAD_EMBEDDED_DEX=%s XPAD_TRANSPORT=31317",
-           SYSTEM_DEX, SYSTEM_DEX);
+           quoted, SYSTEM_DEX);
   if (has_apk && (!strcmp(argv[1], "install") || !strcmp(argv[1], "upgrade"))) {
     shell_quote(quoted, sizeof(quoted), provider_apk);
     strlcat(command, " XPAD_PROVIDER_APK=", sizeof(command));
