@@ -32,6 +32,14 @@ extern const unsigned char xpad_anchor_end[];
 #define SYSTEM_APK "/data/user/0/com.android.settings/cache/xpad-installer/staged.apk"
 #define ROOT_DEX "/data/local/tmp/.xpad-installer.dex"
 #define ZNXRUN_APK "/data/local/tmp/.xpad-znxrun.apk"
+#define LOCAL_STAGE_DIR "/data/local/tmp"
+#define LOCAL_DEX_PREFIX ".xpad-installer."
+#define LOCAL_DEX_SUFFIX ".dex"
+#define LOCAL_DEX_TEMPLATE LOCAL_STAGE_DIR "/" LOCAL_DEX_PREFIX "XXXXXX" LOCAL_DEX_SUFFIX
+#define ZNXRUN_APK_PREFIX ".xpad-znxrun."
+#define ZNXRUN_APK_SUFFIX ".apk"
+#define ZNXRUN_APK_TEMPLATE LOCAL_STAGE_DIR "/" ZNXRUN_APK_PREFIX "XXXXXX" ZNXRUN_APK_SUFFIX
+#define STAGE_SUFFIX_LENGTH 4
 #define ANCHOR_APK "/data/local/tmp/.xpad-installer-anchor.apk"
 #define ANCHOR_PACKAGE "com.yoyicue.xpad2.installeranchor"
 #define OEM_INSTALLER "com.tal.pad.znxxservice"
@@ -84,7 +92,11 @@ static int write_all(int fd, const void *data, size_t len) {
   while (len) {
     ssize_t n = write(fd, p, len);
     if (n < 0 && errno == EINTR) continue;
-    if (n <= 0) return -1;
+    if (n < 0) return -1;
+    if (n == 0) {
+      errno = EIO;
+      return -1;
+    }
     p += n;
     len -= (size_t)n;
   }
@@ -122,23 +134,84 @@ static int copy_file(const char *source, const char *target, mode_t mode) {
 static int copy_file_to_open_fd(const char *source, int out, mode_t mode) {
   int in = open(source, O_RDONLY | O_CLOEXEC);
   if (in < 0) {
+    int saved_errno = errno;
     close(out);
+    errno = saved_errno;
     return -1;
   }
   char buffer[65536];
-  int rc = 0;
+  int saved_errno = 0;
   for (;;) {
     ssize_t n = read(in, buffer, sizeof(buffer));
     if (n < 0 && errno == EINTR) continue;
-    if (n < 0) { rc = -1; break; }
+    if (n < 0) { saved_errno = errno; break; }
     if (n == 0) break;
-    if (write_all(out, buffer, (size_t)n) != 0) { rc = -1; break; }
+    if (write_all(out, buffer, (size_t)n) != 0) {
+      saved_errno = errno ? errno : EIO;
+      break;
+    }
   }
-  if (fchmod(out, mode) != 0) rc = -1;
-  if (fsync(out) != 0) rc = -1;
-  if (close(in) != 0) rc = -1;
-  if (close(out) != 0) rc = -1;
-  return rc;
+  if (!saved_errno && fchmod(out, mode) != 0) saved_errno = errno;
+  if (!saved_errno && fsync(out) != 0) saved_errno = errno;
+  if (close(in) != 0 && !saved_errno) saved_errno = errno;
+  if (close(out) != 0 && !saved_errno) saved_errno = errno;
+  if (!saved_errno) return 0;
+  errno = saved_errno;
+  return -1;
+}
+
+static int open_unique_stage(char *path, size_t capacity,
+                             const char *path_template) {
+  int length = snprintf(path, capacity, "%s", path_template);
+  if (length < 0 || (size_t)length >= capacity) {
+    if (capacity) path[0] = 0;
+    errno = ENAMETOOLONG;
+    return -1;
+  }
+  return mkstemps(path, STAGE_SUFFIX_LENGTH);
+}
+
+static int write_unique_stage(char *path, size_t capacity,
+                              const char *path_template, const void *data,
+                              size_t length, mode_t mode) {
+  int fd = open_unique_stage(path, capacity, path_template);
+  if (fd < 0) return -1;
+  int saved_errno = 0;
+  if (write_all(fd, data, length) != 0)
+    saved_errno = errno ? errno : EIO;
+  if (!saved_errno && fchmod(fd, mode) != 0) saved_errno = errno;
+  if (!saved_errno && fsync(fd) != 0) saved_errno = errno;
+  if (close(fd) != 0 && !saved_errno) saved_errno = errno;
+  if (!saved_errno) return 0;
+  unlink(path);
+  errno = saved_errno;
+  return -1;
+}
+
+static int copy_unique_stage(char *path, size_t capacity,
+                             const char *path_template, const char *source,
+                             mode_t mode) {
+  int fd = open_unique_stage(path, capacity, path_template);
+  if (fd < 0) return -1;
+  if (copy_file_to_open_fd(source, fd, mode) == 0) return 0;
+  int saved_errno = errno ? errno : EIO;
+  unlink(path);
+  errno = saved_errno;
+  return -1;
+}
+
+static int stage_failure(const char *artifact, const char *path,
+                         int error_number) {
+  if (!error_number) error_number = EIO;
+  fprintf(stderr,
+          "xpad-install: staging failed artifact=%s path=%s errno=%d error=%s\n",
+          artifact, path && *path ? path : "<unassigned>", error_number,
+          strerror(error_number));
+  return 74;
+}
+
+static void unlink_stage(const char *path) {
+  if (path && *path) unlink(path);
 }
 
 static int connect_tcp(int port) {
@@ -1210,16 +1283,19 @@ static int exec_java(const char *dex_path, int argc, char **argv) {
 }
 
 static int run_embedded_java(int argc, char **argv) {
-  if (write_file(ROOT_DEX, xpad_dex_start,
-                 (size_t)(xpad_dex_end - xpad_dex_start), 0444) != 0) return 74;
+  char dex_path[PATH_MAX] = {0};
+  if (write_unique_stage(dex_path, sizeof(dex_path), LOCAL_DEX_TEMPLATE,
+                         xpad_dex_start,
+                         (size_t)(xpad_dex_end - xpad_dex_start), 0444) != 0)
+    return stage_failure("embedded-dex", dex_path, errno);
   pid_t pid = fork();
   if (pid < 0) {
-    unlink(ROOT_DEX);
+    unlink_stage(dex_path);
     return 70;
   }
-  if (pid == 0) _exit(exec_java(ROOT_DEX, argc, argv));
+  if (pid == 0) _exit(exec_java(dex_path, argc, argv));
   int rc = wait_command(pid);
-  unlink(ROOT_DEX);
+  unlink_stage(dex_path);
   return rc;
 }
 
@@ -1273,34 +1349,42 @@ static int run_java_as_znxrun(int argc, char **argv) {
   if (run_command(probe) != 0) return -1;
   int apk_index = argc >= 2 &&
       (!strcmp(argv[0], "install") || !strcmp(argv[0], "upgrade")) ? argc - 1 : -1;
+  char staged_apk[PATH_MAX] = {0};
+  char dex_path[PATH_MAX] = {0};
   char **effective_argv = argv;
   if (apk_index >= 0) {
-    if (copy_file(argv[apk_index], ZNXRUN_APK, 0444) != 0) return 74;
+    if (copy_unique_stage(staged_apk, sizeof(staged_apk),
+                          ZNXRUN_APK_TEMPLATE, argv[apk_index], 0444) != 0)
+      return stage_failure("managed-0044-apk", staged_apk, errno);
     effective_argv = calloc((size_t)argc, sizeof(char *));
     if (!effective_argv) {
-      unlink(ZNXRUN_APK);
+      unlink_stage(staged_apk);
       return 70;
     }
     for (int i = 0; i < argc; i++) effective_argv[i] = argv[i];
-    effective_argv[apk_index] = ZNXRUN_APK;
+    effective_argv[apk_index] = staged_apk;
   }
-  if (write_file(ROOT_DEX, xpad_dex_start,
-                 (size_t)(xpad_dex_end - xpad_dex_start), 0444) != 0) {
+  if (write_unique_stage(dex_path, sizeof(dex_path), LOCAL_DEX_TEMPLATE,
+                         xpad_dex_start,
+                         (size_t)(xpad_dex_end - xpad_dex_start), 0444) != 0) {
+    int saved_errno = errno;
     free(effective_argv == argv ? NULL : effective_argv);
-    unlink(ZNXRUN_APK);
-    return 74;
+    unlink_stage(staged_apk);
+    return stage_failure("managed-0044-dex", dex_path, saved_errno);
   }
 
-  char command[16384], classpath[PATH_MAX * 2], quoted_classpath[PATH_MAX * 2 + 16];
-  snprintf(classpath, sizeof(classpath), "%s:%s", ROOT_DEX, oem_apk);
+  char command[16384], classpath[PATH_MAX * 2];
+  char quoted_classpath[PATH_MAX * 2 + 16], quoted_dex[PATH_MAX + 16];
+  snprintf(classpath, sizeof(classpath), "%s:%s", dex_path, oem_apk);
   shell_quote(quoted_classpath, sizeof(quoted_classpath), classpath);
+  shell_quote(quoted_dex, sizeof(quoted_dex), dex_path);
   int used = snprintf(command, sizeof(command),
       "CLASSPATH=%s "
-      "XPAD_EMBEDDED_DEX=" ROOT_DEX " XPAD_TRANSPORT=0044 "
-      "/system/bin/app_process / XpadInstaller", quoted_classpath);
+      "XPAD_EMBEDDED_DEX=%s XPAD_TRANSPORT=0044 "
+      "/system/bin/app_process / XpadInstaller", quoted_classpath, quoted_dex);
   if (used < 0 || (size_t)used >= sizeof(command)) {
-    unlink(ROOT_DEX);
-    unlink(ZNXRUN_APK);
+    unlink_stage(dex_path);
+    unlink_stage(staged_apk);
     free(effective_argv == argv ? NULL : effective_argv);
     return 64;
   }
@@ -1309,8 +1393,8 @@ static int run_java_as_znxrun(int argc, char **argv) {
     shell_quote(quoted, sizeof(quoted), effective_argv[i]);
     size_t need = 1 + strlen(quoted);
     if ((size_t)used + need >= sizeof(command)) {
-      unlink(ROOT_DEX);
-      unlink(ZNXRUN_APK);
+      unlink_stage(dex_path);
+      unlink_stage(staged_apk);
       free(effective_argv == argv ? NULL : effective_argv);
       return 64;
     }
@@ -1323,8 +1407,8 @@ static int run_java_as_znxrun(int argc, char **argv) {
     "/system/bin/run-as", "znxrun", "/system/bin/sh", "-c", command, NULL
   };
   int rc = run_command(child);
-  unlink(ROOT_DEX);
-  unlink(ZNXRUN_APK);
+  unlink_stage(dex_path);
+  unlink_stage(staged_apk);
   free(effective_argv == argv ? NULL : effective_argv);
   return rc;
 }

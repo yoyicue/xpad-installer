@@ -28,9 +28,9 @@ except ModuleNotFoundError:  # Pure classification tests may run without Tk inst
     messagebox = None
     ttk = None
 
-VERSION = "2.10.0"
+VERSION = "2.11.0"
 BASE = Path(__file__).resolve().parent
-TOOL_SHA256 = "aa30623d33247067c45b6faffa2887c1dfa76acd7bbceb1033fd3bde03d1475e"
+TOOL_SHA256 = "641eb9d1d790397e3087a41b922cd8f807188ff382d42938f1beb55a10b2d743"
 REMOTE_TOOL = "/data/local/tmp/xpad-install"
 REMOTE_APK = "/data/local/tmp/xpad-target.apk"
 PACKAGE_RE = re.compile(r"package=([A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)+)")
@@ -69,6 +69,13 @@ def classify_install_failure(output: str, exit_code: int) -> FailureAdvice:
             "reboot-required",
             "当前启动周期已触发安全熔断，请普通重启设备后再试。",
             True,
+        )
+    if exit_code == 74 or "staging failed artifact=" in lower:
+        return FailureAdvice(
+            "staging-io",
+            "设备本地临时文件创建或写入失败。普通重启不是默认处理；请保留日志中的 "
+            "artifact、path 和 errno 供诊断，然后使用当前完整工具包重试。",
+            False,
         )
     if "signature" in lower and ("mismatch" in lower or "incompatible" in lower):
         return FailureAdvice(

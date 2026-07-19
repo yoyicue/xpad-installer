@@ -157,7 +157,7 @@ adb -s SERIAL shell getprop ro.product.model
 macOS/Linux 校验：
 
 ```shell
-cd xpad-installer-v0.2.13-android-arm64
+cd xpad-installer-v0.2.14-android-arm64
 shasum -a 256 -c SHA256SUMS
 ```
 
@@ -365,6 +365,8 @@ adb -s SERIAL shell /data/local/tmp/xpad-install cleanup
 ```
 
 用于请求清理正常事务涉及的内嵌 DEX、临时 transfer 文件/listener，并优先从持久备份精确恢复 31317 之前的隐藏设置。没有备份时，它只会删除能够确认属于本工具的残留 payload，不会覆盖无关设置值。
+
+v0.2.14 起，0044 安装使用每次唯一的 APK/DEX 临时文件；旧任务异常中断留下的只读文件不会再阻塞下一次安装。正常成功和失败路径都会删除本次临时文件，`cleanup` 继续删除旧版的固定 staging 路径，但不会扫描并误删另一个并发安装正在使用的唯一文件。若设备存储或权限确实异常，命令会以 `staging failed artifact=... path=... errno=...` 给出具体诊断并返回 74；这个状态本身不要求重启。
 
 它不会：
 

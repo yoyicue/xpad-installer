@@ -64,6 +64,14 @@ the native CLI before transport selection; none of them can acquire a 31317
 runner. Unknown commands also fail before transport selection. `self-test` only
 validates the locked ELF's embedded DEX and anchor.
 
+Managed 0044 operations stage their APK and embedded DEX under unique,
+short-lived `/data/local/tmp` names. A stale read-only file from an interrupted
+older run therefore cannot poison the next install. Every normal exit removes
+its own files, while `cleanup` still removes the legacy fixed staging names. An
+I/O failure reports the artifact, path, numeric `errno`, and error text before
+returning exit 74. Cleanup never sweeps another concurrently running operation's
+unique files.
+
 `znxrun status` is read-only and reports `healthy`, `legacy`, `missing`, or
 `invalid`. `znxrun ensure` is idempotent: it installs/verifies the signed anchor,
 persists the exact installer attribution, restores the temporary OEM whitelist,
@@ -123,7 +131,7 @@ recovery-key fingerprint. Private key material is never copied into the repo.
 make package
 ```
 
-This produces `dist/xpad-installer-v0.2.13-android-arm64.zip`. The archive
+This produces `dist/xpad-installer-v0.2.14-android-arm64.zip`. The archive
 contains the executable, this README, the Chinese beginner guide, the GPLv3
 license, and a SHA-256 manifest for the executable.
 
@@ -154,13 +162,13 @@ It never clears or creates a PIN, pattern, or password and never writes the raw
 ## Windows safe-install GUI
 
 The separate beginner-facing Windows toolkit installs a selected APK through
-the same locked `xpad-install` v0.2.13 engine:
+the same locked `xpad-install` v0.2.14 engine:
 
 ```shell
 make windows-toolkit-package
 ```
 
-This produces `dist/xpad-safe-install-toolkit-v2.10.0.zip`. The archive includes
+This produces `dist/xpad-safe-install-toolkit-v2.11.0.zip`. The archive includes
 `xpad-safe-install-gui.bat`, the Python GUI, the locked device-side executable,
 the Chinese guide, license, and checksums. It does not bundle `adb.exe`; Android
 Platform-Tools may be placed beside the batch file, in a `platform-tools`

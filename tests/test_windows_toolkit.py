@@ -17,10 +17,10 @@ SPEC.loader.exec_module(MODULE)
 
 class WindowsToolkitTests(unittest.TestCase):
     def test_toolkit_locks_current_engine(self):
-        self.assertEqual(MODULE.VERSION, "2.10.0")
+        self.assertEqual(MODULE.VERSION, "2.11.0")
         self.assertEqual(
             MODULE.TOOL_SHA256,
-            "aa30623d33247067c45b6faffa2887c1dfa76acd7bbceb1033fd3bde03d1475e",
+            "641eb9d1d790397e3087a41b922cd8f807188ff382d42938f1beb55a10b2d743",
         )
 
     def test_permission_conflict_is_not_misclassified_as_reboot(self):
@@ -40,6 +40,18 @@ class WindowsToolkitTests(unittest.TestCase):
         advice = MODULE.classify_install_failure("INSTALL_FAILED_INVALID_APK", 1)
         self.assertEqual(advice.kind, "install-failed")
         self.assertFalse(advice.reboot_required)
+
+    def test_staging_io_failure_preserves_errno_and_does_not_request_reboot(self):
+        advice = MODULE.classify_install_failure(
+            "xpad-install: staging failed artifact=managed-0044-apk "
+            "path=/data/local/tmp/.xpad-znxrun.A1b2C3.apk errno=13 "
+            "error=Permission denied",
+            74,
+        )
+        self.assertEqual(advice.kind, "staging-io")
+        self.assertFalse(advice.reboot_required)
+        self.assertIn("artifact", advice.message)
+        self.assertIn("errno", advice.message)
 
     def test_structured_error_does_not_infer_reboot_from_message_text(self):
         error = MODULE.InstallError("普通重启不能修复这个 APK", False)

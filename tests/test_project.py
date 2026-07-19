@@ -308,6 +308,32 @@ class StandaloneProjectTests(unittest.TestCase):
         main = native[native.index("int main(int argc, char **argv)") :]
         self.assertIn("if (getuid() == 0) return install_via_root_provider(argc, argv);", main)
 
+    def test_managed_0044_staging_is_unique_and_diagnostic(self):
+        native = (ROOT / "native/xpad_install.c").read_text()
+        managed = native[native.index("static int run_java_as_znxrun") :]
+        managed = managed[:managed.index("static int apk_arg_index")]
+        embedded = native[native.index("static int run_embedded_java") :]
+        embedded = embedded[:embedded.index("static int configure_autostart")]
+
+        for value in (
+            'LOCAL_DEX_TEMPLATE LOCAL_STAGE_DIR "/" LOCAL_DEX_PREFIX "XXXXXX"',
+            'ZNXRUN_APK_TEMPLATE LOCAL_STAGE_DIR "/" ZNXRUN_APK_PREFIX "XXXXXX"',
+            "mkstemps(path, STAGE_SUFFIX_LENGTH)",
+            'stage_failure("managed-0044-apk", staged_apk, errno)',
+            'stage_failure("managed-0044-dex", dex_path, saved_errno)',
+            "errno=%d error=%s",
+        ):
+            self.assertIn(value, native, value)
+
+        self.assertIn("copy_unique_stage", managed)
+        self.assertIn("write_unique_stage", managed)
+        self.assertIn("unlink_stage(dex_path)", managed)
+        self.assertIn("unlink_stage(staged_apk)", managed)
+        self.assertNotIn("ZNXRUN_APK, 0444", managed)
+        self.assertNotIn("write_file(ROOT_DEX", managed)
+        self.assertIn("write_unique_stage", embedded)
+        self.assertNotIn("write_file(ROOT_DEX", embedded)
+
     def test_unknown_commands_cannot_reach_a_privileged_transport(self):
         native = (ROOT / "native/xpad_install.c").read_text()
         main = native[native.index("int main(int argc, char **argv)") :]
