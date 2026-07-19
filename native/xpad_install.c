@@ -119,6 +119,28 @@ static int copy_file(const char *source, const char *target, mode_t mode) {
   close(in); close(out); return rc;
 }
 
+static int copy_file_to_open_fd(const char *source, int out, mode_t mode) {
+  int in = open(source, O_RDONLY | O_CLOEXEC);
+  if (in < 0) {
+    close(out);
+    return -1;
+  }
+  char buffer[65536];
+  int rc = 0;
+  for (;;) {
+    ssize_t n = read(in, buffer, sizeof(buffer));
+    if (n < 0 && errno == EINTR) continue;
+    if (n < 0) { rc = -1; break; }
+    if (n == 0) break;
+    if (write_all(out, buffer, (size_t)n) != 0) { rc = -1; break; }
+  }
+  if (fchmod(out, mode) != 0) rc = -1;
+  if (fsync(out) != 0) rc = -1;
+  if (close(in) != 0) rc = -1;
+  if (close(out) != 0) rc = -1;
+  return rc;
+}
+
 static int connect_tcp(int port) {
   int fd = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
   if (fd < 0) return -1;
@@ -1843,8 +1865,16 @@ static int install_via_root_provider(int argc, char **argv) {
   }
 
   const char *apk = argv[argc - 1];
-  if (setenv("XPAD_PROVIDER_APK", apk, 1) != 0 ||
+  char provider_apk[] = "/sdcard/Download/.xpad-root-provider.XXXXXX.apk";
+  int provider_fd = mkstemps(provider_apk, 4);
+  if (provider_fd < 0 || copy_file_to_open_fd(apk, provider_fd, 0444) != 0) {
+    if (provider_fd >= 0) unlink(provider_apk);
+    fprintf(stderr, "xpad-install: cannot stage the root OEM Provider APK\n");
+    return 74;
+  }
+  if (setenv("XPAD_PROVIDER_APK", provider_apk, 1) != 0 ||
       setenv("XPAD_TRANSPORT", "root-provider", 1) != 0) {
+    unlink(provider_apk);
     fprintf(stderr, "xpad-install: cannot prepare root OEM provider environment\n");
     return 70;
   }
@@ -1854,6 +1884,7 @@ static int install_via_root_provider(int argc, char **argv) {
   int rc = run_embedded_java(argc - 1, argv + 1);
   unsetenv("XPAD_PROVIDER_APK");
   unsetenv("XPAD_TRANSPORT");
+  unlink(provider_apk);
   return rc;
 }
 

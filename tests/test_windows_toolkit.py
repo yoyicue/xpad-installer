@@ -20,7 +20,7 @@ class WindowsToolkitTests(unittest.TestCase):
         self.assertEqual(MODULE.VERSION, "2.10.0")
         self.assertEqual(
             MODULE.TOOL_SHA256,
-            "76c0701e4d817f32a33be7ef1900e5181bc3b9af902d2f7557db732079526d83",
+            "aa30623d33247067c45b6faffa2887c1dfa76acd7bbceb1033fd3bde03d1475e",
         )
 
     def test_permission_conflict_is_not_misclassified_as_reboot(self):

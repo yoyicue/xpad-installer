@@ -282,6 +282,10 @@ class StandaloneProjectTests(unittest.TestCase):
         root_path = native[native.index("static int install_via_root_provider") :]
         root_path = root_path[:root_path.index("static int install_via_managed_0044")]
         self.assertIn('setenv("XPAD_TRANSPORT", "root-provider", 1)', root_path)
+        self.assertIn('/sdcard/Download/.xpad-root-provider.XXXXXX.apk', root_path)
+        self.assertIn("mkstemps(provider_apk, 4)", root_path)
+        self.assertIn("copy_file_to_open_fd(apk, provider_fd, 0444)", root_path)
+        self.assertIn("unlink(provider_apk)", root_path)
         self.assertIn("run_embedded_java(argc - 1, argv + 1)", root_path)
         self.assertIn('!strcmp(backend, "direct")', root_path)
         self.assertNotIn("ensure_znxrun", root_path)
