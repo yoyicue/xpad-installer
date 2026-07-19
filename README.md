@@ -34,9 +34,14 @@ xpad-install znxrun create --package PACKAGE --apk UPDATE.apk [--apply]
 xpad-install cleanup
 ```
 
-Every `install` and `upgrade` verifies and, when needed, repairs the managed
-0044 OEM installer identity, then performs the target APK transaction only
-through that identity. The persistent source is a dedicated no-code, no-permission
+When invoked from ordinary ADB shell, every `install` and `upgrade` verifies
+and, when needed, repairs the managed 0044 OEM installer identity, then performs
+the target APK transaction only through that identity. When invoked by an
+authorized UID-0 service (for example BoomInstaller through Magisk, KernelSU,
+or SukiSU Ultra), the target is dispatched directly to the real XPad OEM
+installer Provider; the direct PackageInstaller backend remains blocked. Both
+paths verify that Android records `com.tal.pad.znxxservice` as the installer.
+The persistent 0044 source is a dedicated no-code, no-permission
 package named `com.yoyicue.xpad2.installeranchor`, embedded in the ELF and not
 used for normal application updates. If 0044 is missing or broken, the bounded
 UID 1000/31317 runner is used only to repair 0044. The target APK is not handed
@@ -116,7 +121,7 @@ recovery-key fingerprint. Private key material is never copied into the repo.
 make package
 ```
 
-This produces `dist/xpad-installer-v0.2.11-android-arm64.zip`. The archive
+This produces `dist/xpad-installer-v0.2.12-android-arm64.zip`. The archive
 contains the executable, this README, the Chinese beginner guide, the GPLv3
 license, and a SHA-256 manifest for the executable.
 
@@ -147,7 +152,7 @@ It never clears or creates a PIN, pattern, or password and never writes the raw
 ## Windows safe-install GUI
 
 The separate beginner-facing Windows toolkit installs a selected APK through
-the same locked `xpad-install` v0.2.11 engine:
+the same locked `xpad-install` v0.2.12 engine:
 
 ```shell
 make windows-toolkit-package

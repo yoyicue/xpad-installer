@@ -157,7 +157,7 @@ adb -s SERIAL shell getprop ro.product.model
 macOS/Linux 校验：
 
 ```shell
-cd xpad-installer-v0.2.11-android-arm64
+cd xpad-installer-v0.2.12-android-arm64
 shasum -a 256 -c SHA256SUMS
 ```
 

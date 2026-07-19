@@ -1830,6 +1830,33 @@ static int parse_apk_operation(int argc, char **argv, const char **backend) {
   return 0;
 }
 
+static int install_via_root_provider(int argc, char **argv) {
+  const char *backend = NULL;
+  int valid = parse_apk_operation(argc, argv, &backend);
+  if (valid != 0) return valid;
+  if (getuid() != 0) return 77;
+  if (!strcmp(backend, "direct")) {
+    fprintf(stderr,
+            "xpad-install: direct PackageInstaller backend is blocked for UID 0; "
+            "use auto or provider\n");
+    return 64;
+  }
+
+  const char *apk = argv[argc - 1];
+  if (setenv("XPAD_PROVIDER_APK", apk, 1) != 0 ||
+      setenv("XPAD_TRANSPORT", "root-provider", 1) != 0) {
+    fprintf(stderr, "xpad-install: cannot prepare root OEM provider environment\n");
+    return 70;
+  }
+  fprintf(stderr,
+          "xpad-install: installing through root OEM provider (backend=%s)\n",
+          backend);
+  int rc = run_embedded_java(argc - 1, argv + 1);
+  unsetenv("XPAD_PROVIDER_APK");
+  unsetenv("XPAD_TRANSPORT");
+  return rc;
+}
+
 static int install_via_managed_0044(int argc, char **argv) {
   const char *backend = NULL;
   int valid = parse_apk_operation(argc, argv, &backend);
@@ -1956,8 +1983,10 @@ int main(int argc, char **argv) {
      */
     return serve(argc - 1, argv + 1);
   }
-  if (!strcmp(argv[1], "install") || !strcmp(argv[1], "upgrade"))
+  if (!strcmp(argv[1], "install") || !strcmp(argv[1], "upgrade")) {
+    if (getuid() == 0) return install_via_root_provider(argc, argv);
     return install_via_managed_0044(argc, argv);
+  }
 
   /* The only remaining public command that may select a privileged transport
    * is the explicit 0044 repair preflight. Reject typos and unknown commands

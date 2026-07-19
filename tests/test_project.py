@@ -276,9 +276,17 @@ class StandaloneProjectTests(unittest.TestCase):
         self.assertNotIn("ZNXRUN_ALIAS_LINE", native)
         self.assertNotIn('!strcmp(uid_output, "10072")', native)
 
-    def test_every_apk_operation_uses_0044_and_31317_only_repairs_it(self):
+    def test_apk_operations_use_root_provider_or_managed_0044(self):
         native = (ROOT / "native/xpad_install.c").read_text()
         java = (ROOT / "exploit/XpadInstaller.java").read_text()
+        root_path = native[native.index("static int install_via_root_provider") :]
+        root_path = root_path[:root_path.index("static int install_via_managed_0044")]
+        self.assertIn('setenv("XPAD_TRANSPORT", "root-provider", 1)', root_path)
+        self.assertIn("run_embedded_java(argc - 1, argv + 1)", root_path)
+        self.assertIn('!strcmp(backend, "direct")', root_path)
+        self.assertNotIn("ensure_znxrun", root_path)
+        self.assertNotIn("system_transport", root_path)
+
         install_path = native[native.index("static int install_via_managed_0044") :]
         install_path = install_path[:install_path.index("int main(")]
         self.assertIn("ensure_znxrun(argv[0])", install_path)
@@ -292,6 +300,9 @@ class StandaloneProjectTests(unittest.TestCase):
         self.assertIn("repair == ZNXRUN_ENSURE_PENDING", native)
         self.assertIn("if (!ok && Process.myUid() != 0)", java)
         self.assertIn("provider did not commit; trying direct backend in current identity", java)
+
+        main = native[native.index("int main(int argc, char **argv)") :]
+        self.assertIn("if (getuid() == 0) return install_via_root_provider(argc, argv);", main)
 
     def test_unknown_commands_cannot_reach_a_privileged_transport(self):
         native = (ROOT / "native/xpad_install.c").read_text()
