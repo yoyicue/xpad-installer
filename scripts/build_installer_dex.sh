@@ -13,17 +13,16 @@ WORK=${TMPDIR:-/tmp}/xpad-installer-build
 rm -rf "$WORK"
 mkdir -p "$WORK/direct" "$WORK/direct-dex" "$WORK/provider" "$WORK/provider-dex"
 
-javac -cp "$ANDROID_JAR" -d "$WORK/direct" "$ROOT/exploit/DirectInstaller.java"
-"$D8" --min-api 33 --output "$WORK/direct-dex" \
-  "$WORK/direct/DirectInstaller.class" "$WORK/direct/DirectInstaller\$1.class"
+javac -source 17 -target 17 -cp "$ANDROID_JAR" -d "$WORK/direct" "$ROOT/exploit/DirectInstaller.java"
+"$D8" --min-api 33 --output "$WORK/direct-dex" "$WORK/direct"/*.class
 cp "$WORK/direct-dex/classes.dex" "$ROOT/exploit/installer.dex"
 
-javac -cp "$ANDROID_JAR" -d "$WORK/provider" "$ROOT/exploit/ZnxxProviderInstaller.java"
+javac -source 17 -target 17 -cp "$ANDROID_JAR" -d "$WORK/provider" "$ROOT/exploit/ZnxxProviderInstaller.java"
 "$D8" --min-api 33 --output "$WORK/provider-dex" "$WORK/provider/ZnxxProviderInstaller.class"
 cp "$WORK/provider-dex/classes.dex" "$ROOT/exploit/znxx_provider_installer.dex"
 
 mkdir -p "$WORK/unified" "$WORK/unified-dex"
-javac -cp "$ANDROID_JAR" -d "$WORK/unified" \
+javac -source 17 -target 17 -cp "$ANDROID_JAR" -d "$WORK/unified" \
   "$ROOT/exploit/DirectInstaller.java" \
   "$ROOT/exploit/ZnxxProviderInstaller.java" \
   "$ROOT/exploit/Znxrun0044.java" \

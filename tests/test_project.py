@@ -400,6 +400,19 @@ class StandaloneProjectTests(unittest.TestCase):
         self.assertNotIn("adb.exe", package)
         self.assertNotIn("platform-tools", package)
 
+    def test_apks_split_bundle_support_is_present_and_bounded(self):
+        direct = (ROOT / "exploit/DirectInstaller.java").read_text()
+        java = (ROOT / "exploit/XpadInstaller.java").read_text()
+        native = (ROOT / "native/xpad_install.c").read_text()
+        self.assertIn("static boolean isApksArchive(File file)", direct)
+        self.assertIn("static InstallOutcome doInstallApks(", direct)
+        self.assertIn("selectApksEntries", direct)
+        self.assertIn("android.content.pm.extra.PACKAGE_NAME", direct)
+        self.assertIn("DirectInstaller.isApksArchive(apk)", java)
+        self.assertIn("Provider backend does not support .apks split archives", java)
+        self.assertIn("static int archive_is_apks(", native)
+        self.assertIn("install_apks_via_root_oem_uid", native)
+
 
 if __name__ == "__main__":
     unittest.main()

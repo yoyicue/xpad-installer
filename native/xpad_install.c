@@ -13,6 +13,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/un.h>
@@ -1936,11 +1937,158 @@ static int parse_apk_operation(int argc, char **argv, const char **backend) {
   return 0;
 }
 
+static uint16_t read_le16(const unsigned char *p) {
+  return (uint16_t)p[0] | ((uint16_t)p[1] << 8);
+}
+
+static uint32_t read_le32(const unsigned char *p) {
+  return (uint32_t)p[0] | ((uint32_t)p[1] << 8) |
+      ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+}
+
+static int archive_is_apks(const char *path) {
+  int fd = open(path, O_RDONLY | O_CLOEXEC);
+  if (fd < 0) return 0;
+  struct stat st;
+  if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode) || st.st_size < 22) {
+    close(fd);
+    return 0;
+  }
+  size_t tail_len = st.st_size > 65558 ? 65558 : (size_t)st.st_size;
+  unsigned char *tail = malloc(tail_len);
+  if (!tail) {
+    close(fd);
+    return 0;
+  }
+  ssize_t got = pread(fd, tail, tail_len, st.st_size - (off_t)tail_len);
+  if (got != (ssize_t)tail_len) {
+    free(tail);
+    close(fd);
+    return 0;
+  }
+  ssize_t eocd = -1;
+  for (ssize_t i = (ssize_t)tail_len - 22; i >= 0; i--) {
+    if (tail[i] == 0x50 && tail[i + 1] == 0x4b &&
+        tail[i + 2] == 0x05 && tail[i + 3] == 0x06) {
+      eocd = i;
+      break;
+    }
+  }
+  if (eocd < 0) {
+    free(tail);
+    close(fd);
+    return 0;
+  }
+  uint32_t cd_size = read_le32(tail + eocd + 12);
+  uint32_t cd_offset = read_le32(tail + eocd + 16);
+  free(tail);
+  if (cd_size == 0 || cd_size > 16 * 1024 * 1024 ||
+      (off_t)cd_offset + (off_t)cd_size > st.st_size) {
+    close(fd);
+    return 0;
+  }
+  unsigned char *cd = malloc(cd_size);
+  if (!cd) {
+    close(fd);
+    return 0;
+  }
+  got = pread(fd, cd, cd_size, (off_t)cd_offset);
+  close(fd);
+  if (got != (ssize_t)cd_size) {
+    free(cd);
+    return 0;
+  }
+  int has_root_manifest = 0;
+  int has_apk_member = 0;
+  size_t pos = 0;
+  while (pos + 46 <= cd_size) {
+    if (cd[pos] != 0x50 || cd[pos + 1] != 0x4b ||
+        cd[pos + 2] != 0x01 || cd[pos + 3] != 0x02) {
+      break;
+    }
+    uint16_t name_len = read_le16(cd + pos + 28);
+    uint16_t extra_len = read_le16(cd + pos + 30);
+    uint16_t comment_len = read_le16(cd + pos + 32);
+    size_t next = pos + 46 + (size_t)name_len + (size_t)extra_len + (size_t)comment_len;
+    if (next > cd_size) break;
+    const char *name = (const char *)(cd + pos + 46);
+    if (name_len == 19 && !memcmp(name, "AndroidManifest.xml", 19)) {
+      has_root_manifest = 1;
+      break;
+    }
+    if (name_len > 4 && name[name_len - 1] != '/' &&
+        strncasecmp(name + name_len - 4, ".apk", 4) == 0) {
+      has_apk_member = 1;
+    }
+    pos = next;
+  }
+  free(cd);
+  return !has_root_manifest && has_apk_member;
+}
+
+static int install_apks_via_root_oem_uid(int argc, char **argv, const char *backend) {
+  if (!strcmp(backend, "provider")) {
+    fprintf(stderr,
+            "xpad-install: provider backend does not support .apks split archives; "
+            "use auto or direct\n");
+    return 64;
+  }
+  uid_t oem_uid = 0;
+  if (lookup_oem_installer_uid(&oem_uid) != 0) {
+    fprintf(stderr, "xpad-install: cannot resolve OEM installer UID for %s\n",
+            OEM_INSTALLER);
+    return 66;
+  }
+  char staged_apk[PATH_MAX] = {0};
+  char dex_path[PATH_MAX] = {0};
+  if (copy_unique_stage(staged_apk, sizeof(staged_apk),
+                        ZNXRUN_APK_TEMPLATE, argv[argc - 1], 0444) != 0)
+    return stage_failure("root-oem-apks", staged_apk, errno);
+  if (write_unique_stage(dex_path, sizeof(dex_path), LOCAL_DEX_TEMPLATE,
+                         xpad_dex_start,
+                         (size_t)(xpad_dex_end - xpad_dex_start), 0444) != 0) {
+    int saved_errno = errno;
+    unlink_stage(staged_apk);
+    return stage_failure("root-oem-dex", dex_path, saved_errno);
+  }
+  char **child_argv = calloc((size_t)(argc - 1) + 1, sizeof(char *));
+  if (!child_argv) {
+    unlink_stage(dex_path);
+    unlink_stage(staged_apk);
+    return 70;
+  }
+  for (int i = 1; i < argc; i++) child_argv[i - 1] = argv[i];
+  child_argv[argc - 2] = staged_apk;
+  fprintf(stderr,
+          "xpad-install: installing .apks bundle through OEM installer UID %u\n",
+          (unsigned)oem_uid);
+  pid_t pid = fork();
+  if (pid < 0) {
+    free(child_argv);
+    unlink_stage(dex_path);
+    unlink_stage(staged_apk);
+    return 70;
+  }
+  if (pid == 0) {
+    setenv("XPAD_TRANSPORT", "root-oem-direct", 1);
+    if (setgid(oem_uid) != 0 || setuid(oem_uid) != 0) _exit(77);
+    _exit(exec_java(dex_path, argc - 1, child_argv));
+  }
+  int rc = wait_command(pid);
+  free(child_argv);
+  unlink_stage(dex_path);
+  unlink_stage(staged_apk);
+  return rc;
+}
+
 static int install_via_root_provider(int argc, char **argv) {
   const char *backend = NULL;
   int valid = parse_apk_operation(argc, argv, &backend);
   if (valid != 0) return valid;
   if (getuid() != 0) return 77;
+  if (archive_is_apks(argv[argc - 1])) {
+    return install_apks_via_root_oem_uid(argc, argv, backend);
+  }
   if (!strcmp(backend, "direct")) {
     fprintf(stderr,
             "xpad-install: direct PackageInstaller backend is blocked for UID 0; "

@@ -36,7 +36,7 @@ AAPT2=$(find_tool aapt2)
 APKSIGNER=$(find_tool apksigner)
 badging=$("$AAPT2" dump badging "$APK")
 [[ "$badging" == *"package: name='$EXPECTED_PACKAGE' versionCode='2'"* ]]
-[[ "$badging" == *"application-label:'XPad2 Installer Anchor'"* ]]
+[[ "$badging" == *"application-label:'XPad2 Installer Anchor'"* || "$badging" == *"application: label='XPad2 Installer Anchor'"* ]]
 permissions=$("$AAPT2" dump permissions "$APK")
 [[ "$permissions" != *"uses-permission:"* ]]
 verification=$("$APKSIGNER" verify --verbose --print-certs "$APK")

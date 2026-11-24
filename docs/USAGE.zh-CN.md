@@ -157,7 +157,7 @@ adb -s SERIAL shell getprop ro.product.model
 macOS/Linux 校验：
 
 ```shell
-cd xpad-installer-v0.2.14-android-arm64
+cd xpad-installer-v0.2.15-android-arm64
 shasum -a 256 -c SHA256SUMS
 ```
 
@@ -232,7 +232,7 @@ adb -s SERIAL push your-app.apk /sdcard/Download/your-app.apk
 
 推荐使用 `/sdcard/Download`，因为 shell 和 OEM 安装通道都容易读取这里的文件。
 
-目前只支持单个普通 `.apk`。不要直接传 `.apks`、`.xapk`、`.apkm` 或拆分 APK 集合。
+支持普通 `.apk` 以及标准 `.apks` 拆分安装包（Split APKs，自动通过 0044 Direct 多文件会话原子提交）。不要传 `.xapk` 或 `.apkm`。
 
 ### 第三步：安装并验证
 

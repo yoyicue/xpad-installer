@@ -21,8 +21,8 @@ external CVE script at a machine-specific path, is not part of this project.
 xpad-install self-test
 xpad-install --version
 xpad-install doctor
-xpad-install install [--backend auto|provider|direct] APK
-xpad-install upgrade [--backend auto|provider|direct] APK
+xpad-install install [--backend auto|provider|direct] APK_OR_APKS
+xpad-install upgrade [--backend auto|provider|direct] APK_OR_APKS
 xpad-install verify PACKAGE [VERSION_CODE]
 xpad-install activate --starter=PATH --apk=MANAGER.apk
 xpad-install autostart enable
@@ -131,7 +131,7 @@ recovery-key fingerprint. Private key material is never copied into the repo.
 make package
 ```
 
-This produces `dist/xpad-installer-v0.2.14-android-arm64.zip`. The archive
+This produces `dist/xpad-installer-v0.2.15-android-arm64.zip`. The archive
 contains the executable, this README, the Chinese beginner guide, the GPLv3
 license, and a SHA-256 manifest for the executable.
 
@@ -162,13 +162,13 @@ It never clears or creates a PIN, pattern, or password and never writes the raw
 ## Windows safe-install GUI
 
 The separate beginner-facing Windows toolkit installs a selected APK through
-the same locked `xpad-install` v0.2.14 engine:
+the same locked `xpad-install` v0.2.15 engine:
 
 ```shell
 make windows-toolkit-package
 ```
 
-This produces `dist/xpad-safe-install-toolkit-v2.11.0.zip`. The archive includes
+This produces `dist/xpad-safe-install-toolkit-v2.12.0.zip`. The archive includes
 `xpad-safe-install-gui.bat`, the Python GUI, the locked device-side executable,
 the Chinese guide, license, and checksums. It does not bundle `adb.exe`; Android
 Platform-Tools may be placed beside the batch file, in a `platform-tools`
